@@ -1,0 +1,88 @@
+{
+  "requested_tracks_per_genre": 1,
+  "saved_tracks": 1,
+  "genres": [
+    "afropop"
+  ],
+  "base_duration": 150.0,
+  "duration_variance_seconds": 10.0,
+  "vram_retry_duration_step_seconds": 15.0,
+  "allowed_keys": [
+    "A minor",
+    "A# minor",
+    "B minor",
+    "C minor",
+    "C# minor",
+    "D minor",
+    "D# minor",
+    "E minor",
+    "F minor",
+    "F# minor",
+    "G minor",
+    "G# minor"
+  ],
+  "requested_concurrency": 1,
+  "final_concurrency": 1,
+  "target_lufs": -14.0,
+  "clarity_mastering": true,
+  "quality": "best",
+  "model": "acestep-v15-sft",
+  "steps": 50,
+  "guidance_scale": 4.0,
+  "offload": true,
+  "files": [
+    {
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\afropop-joy-highlife-sketch.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\c6bd6e9f-3965-9cb0-3d5f-f2291cc9b039.wav",
+      "wav_master_path": null,
+      "genre": "afropop",
+      "target_duration": 147.3,
+      "key": "G# minor",
+      "section_plan": [
+        {
+          "name": "Intro",
+          "start": "0:00",
+          "end": "0:18",
+          "description": "sparse setup over the same steady pulse, hinting the groove"
+        },
+        {
+          "name": "Chorus",
+          "start": "0:18",
+          "end": "0:47",
+          "description": "main hook, fuller drums, strongest motif; groove and tempo unchanged"
+        },
+        {
+          "name": "Verse",
+          "start": "0:47",
+          "end": "1:15",
+          "description": "reduced arrangement, new melodic movement; same steady groove"
+        },
+        {
+          "name": "Chorus",
+          "start": "1:15",
+          "end": "1:45",
+          "description": "hook returns with extra layers and fills; groove and tempo unchanged"
+        },
+        {
+          "name": "Verse",
+          "start": "1:45",
+          "end": "2:13",
+          "description": "second variation, different instrument focus; same steady groove"
+        },
+        {
+          "name": "Outro",
+          "start": "2:13",
+          "end": "2:27",
+          "description": "strip down over the same pulse and resolve cleanly"
+        }
+      ],
+      "seed": 1234,
+      "track_number": 1,
+      "target_lufs": -14.0,
+      "clarity_mastered": true,
+      "lufs_normalized": true,
+      "fade_out_seconds": 2.0,
+      "faded_out": true
+    }
+  ]
+}
