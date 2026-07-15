@@ -19,6 +19,7 @@ from pathlib import Path
 
 from loguru import logger
 
+import score_track
 from acestep.gpu_config import get_global_gpu_config, resolve_lm_backend
 from acestep.handler import AceStepHandler
 from acestep.inference import GenerationConfig, GenerationParams, create_sample, generate_music
@@ -518,6 +519,16 @@ def parse_args() -> argparse.Namespace:
         help="Specific artist name to reference with --cover. Random per-genre pick if omitted.",
     )
     parser.add_argument(
+        "--style-reference",
+        default=None,
+        help=(
+            "Path to a reference audio file (e.g. a mastered track) whose production "
+            "style influences generation via ACE-Step's reference-audio conditioning. "
+            "Duration stays controlled by --duration -- this does not lock output "
+            "length to the reference file's length, and does not copy its content."
+        ),
+    )
+    parser.add_argument(
         "--lyrics",
         default=DEFAULT_INSTRUMENTAL_LYRICS,
         help="Deprecated; final generation always uses instrumental section tags.",
@@ -547,6 +558,29 @@ def parse_args() -> argparse.Namespace:
         "--concurrency",
         default="1",
         help='Tracks per generation call: "1", "2", or "auto". Use auto to follow VRAM tier.',
+    )
+    parser.add_argument(
+        "--candidates",
+        type=int,
+        default=1,
+        help=(
+            "Generate this many independent candidates per track and automatically keep "
+            "only the best-scoring one (see score_track.py: spectral fizz, transient "
+            "smear, bandwidth, stereo phase, optionally audiobox-aesthetics). Diffusion "
+            "seed-to-seed variance is large -- this is usually a bigger quality lever "
+            "than the whole post-processing chain. Default 1 = current single-render "
+            "behavior. Multiplies generation cost by N and forces --concurrency 1."
+        ),
+    )
+    parser.add_argument(
+        "--candidate-reference",
+        default=None,
+        help="Reference track for --candidates scoring's tonal-balance-distance metric.",
+    )
+    parser.add_argument(
+        "--candidate-use-aesthetics",
+        action="store_true",
+        help="Also score --candidates with the audiobox-aesthetics model (tools/audiobox_venv).",
     )
     parser.add_argument(
         "--target-lufs",
@@ -1061,6 +1095,7 @@ def build_generation_params(
     return GenerationParams(
         task_type="text2music",
         caption=caption,
+        reference_audio=args.style_reference,
         lyrics=build_instrumental_lyrics(duration),
         instrumental=True,
         vocal_language="unknown",
@@ -1771,12 +1806,108 @@ def generate_track_chunk(
         duration = retry_duration
 
 
+# Large enough that per-candidate seeds never collide with adjacent tracks'
+# seed_offset ranges (see build_generation_config_for_track).
+CANDIDATE_SEED_STRIDE = 10_000
+
+
+def generate_track_candidates(
+    dit_handler: AceStepHandler,
+    llm_handler: LLMHandler,
+    args: argparse.Namespace,
+    genre: str,
+    track_index: int,
+    chunk_size: int,
+    initial_duration: float,
+    keyscale: str,
+    save_dir: Path,
+    seed_offset: int,
+):
+    """Generate --candidates independent single-track renders and keep the best.
+
+    Mastering can only polish whatever the diffusion model produced; seed-to-seed
+    variance on these models is large enough that picking the best of several raw
+    candidates is usually a bigger quality lever than the whole post-processing
+    chain. Falls back to a single render at the caller's chunk_size (previous
+    behavior, batching allowed) when candidates <= 1.
+    """
+    num_candidates = max(1, args.candidates)
+    if num_candidates == 1:
+        return generate_track_chunk(
+            dit_handler, llm_handler, args, genre, track_index, chunk_size,
+            initial_duration, keyscale, save_dir, seed_offset,
+        )
+
+    candidate_paths: list[Path] = []
+    candidate_results = []
+    result = None
+    used_duration = initial_duration
+    for candidate_index in range(num_candidates):
+        logger.info(
+            "Generating candidate {}/{} for track {}",
+            candidate_index + 1,
+            num_candidates,
+            track_index + 1,
+        )
+        result, used_duration = generate_track_chunk(
+            dit_handler,
+            llm_handler,
+            args,
+            genre,
+            track_index,
+            1,
+            initial_duration,
+            keyscale,
+            save_dir,
+            seed_offset + candidate_index * CANDIDATE_SEED_STRIDE,
+        )
+        if not result.success or not result.audios:
+            logger.warning(
+                "Candidate {}/{} failed: {}", candidate_index + 1, num_candidates, result.status_message
+            )
+            continue
+        path = Path(result.audios[0].get("path", ""))
+        if path.exists():
+            candidate_paths.append(path)
+            candidate_results.append(result)
+
+    if not candidate_paths:
+        # Every candidate failed; return the last result so the caller's
+        # existing error handling (and status message) kicks in as usual.
+        return result, used_duration
+    if len(candidate_paths) == 1:
+        return candidate_results[0], used_duration
+
+    reference = Path(args.candidate_reference) if args.candidate_reference else None
+    best_path, best_metrics = score_track.pick_best(
+        candidate_paths, reference, args.candidate_use_aesthetics
+    )
+    logger.info(
+        "Best of {}: kept {} (score={:.4f}); discarding {} losing candidate(s)",
+        num_candidates,
+        best_path.name,
+        best_metrics["score"],
+        len(candidate_paths) - 1,
+    )
+    for path in candidate_paths:
+        if path != best_path:
+            try:
+                path.unlink()
+            except OSError:
+                logger.warning("Could not remove losing candidate: {}", path)
+
+    return candidate_results[candidate_paths.index(best_path)], used_duration
+
+
 def main() -> int:
     """Generate tracks and print resulting audio paths."""
     args = parse_args()
     amount = resolve_amount(args)
     genres = resolve_genres(args)
     concurrency = resolve_concurrency(args)
+    if args.candidates > 1 and concurrency != 1:
+        logger.warning("--candidates > 1 requires one track per call; overriding --concurrency to 1")
+        concurrency = 1
     initial_concurrency = concurrency
     save_dir = PROJECT_ROOT / args.output_dir
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -1815,7 +1946,7 @@ def main() -> int:
             keyscale = resolve_minor_key(args, genre, track_index, seed_offset)
             logger.info("Chunk target duration: {}s", duration)
             logger.info("Chunk key: {}", keyscale)
-            result, used_duration = generate_track_chunk(
+            result, used_duration = generate_track_candidates(
                 dit_handler=dit_handler,
                 llm_handler=llm_handler,
                 args=args,
@@ -1916,6 +2047,9 @@ def main() -> int:
         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
         "apollo_restoration": args.enable_apollo_restoration,
         "audiosr_upscale": args.enable_audiosr_upscale,
+        "candidates": args.candidates,
+        "candidate_reference": args.candidate_reference,
+        "candidate_use_aesthetics": args.candidate_use_aesthetics,
         "clarity_mastering": not args.disable_clarity_mastering,
         "quality": args.quality,
         "model": resolve_model(args),

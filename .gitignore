@@ -244,9 +244,11 @@ gradio_outputs/
 acestep/third_parts/vllm/
 
 # Audio restoration/SR tools: vendored clone, isolated venvs, scratch outputs
-# (tools/apollo_infer.py and tools/audiosr_venv_infer.py stay tracked; see tools/README.md)
+# (tools/apollo_infer.py, tools/audiosr_venv_infer.py, and tools/audiobox_infer.py
+# stay tracked; see tools/README.md)
 tools/apollo/
 tools/audiosr_venv/
+tools/audiobox_venv/
 tools/smoke_test_out/
 test_lora_scale_fix.py
 lokr_output/

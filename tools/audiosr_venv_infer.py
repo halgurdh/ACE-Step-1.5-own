@@ -3,10 +3,18 @@
 
 AudioSR's underlying model is mono-only (it reads channel 0 only) and was
 trained on <=5.12s clips (its own code warns that longer inputs "may degrade
-model performance"). This script works around both limits: it processes each
-channel independently in overlapping 5.12s windows and recombines them with
-a linear crossfade, so a full-length stereo track can be upsampled without
-truncation or channel loss.
+model performance"). This script works around both limits by processing in
+overlapping 5.12s windows recombined with a linear crossfade.
+
+Stereo is handled via mid/side, not independent left/right: running the
+generative model on L and R separately makes it hallucinate different high
+frequencies per channel, which is heard as decorrelated/"phasey" top end.
+Instead, only the mid (mono sum) is extended through the diffusion model; the
+side channel is plain-resampled (no generation) to the new sample rate, which
+preserves the source's real recorded stereo width below the original Nyquist
+while keeping all newly-generated high frequencies coherent (mono) between
+channels. As a side benefit this halves AudioSR's runtime per track, since
+only one channel goes through the diffusion model instead of two.
 """
 
 import argparse
@@ -17,20 +25,12 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import torch
+import torchaudio
 
 from audiosr import build_model, super_resolution
 
 TARGET_SR = 48000
 CHUNK_SECONDS = 5.12
-
-
-def _crossfade_window(window_size: int, fade_size: int) -> torch.Tensor:
-    fadein = torch.linspace(0, 1, fade_size)
-    fadeout = torch.linspace(1, 0, fade_size)
-    window = torch.ones(window_size)
-    window[:fade_size] = fadein
-    window[-fade_size:] = fadeout
-    return window
 
 
 def process_channel(
@@ -48,9 +48,6 @@ def process_channel(
     chunk_samples_in = int(round(CHUNK_SECONDS * orig_sr))
     overlap_samples_in = int(round(overlap_seconds * orig_sr))
     step_samples_in = chunk_samples_in - overlap_samples_in
-
-    chunk_samples_out = int(round(CHUNK_SECONDS * TARGET_SR))
-    overlap_samples_out = int(round(overlap_seconds * TARGET_SR))
 
     total_in = len(channel)
     total_out = int(round(total_in * TARGET_SR / orig_sr))
@@ -93,6 +90,7 @@ def process_channel(
 
         out_position = int(round(position * TARGET_SR / orig_sr))
         window = np.ones(len(upscaled))
+        overlap_samples_out = int(round(overlap_seconds * TARGET_SR))
         fade = min(overlap_samples_out, len(upscaled) // 2)
         if fade > 0:
             if position > 0:
@@ -118,7 +116,7 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--model-name", default="basic", choices=["basic", "speech"])
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--ddim-steps", type=int, default=50)
+    parser.add_argument("--ddim-steps", type=int, default=25)
     parser.add_argument("--guidance-scale", type=float, default=3.5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overlap-seconds", type=float, default=0.64)
@@ -126,31 +124,44 @@ def main() -> int:
 
     data, orig_sr = sf.read(args.input, always_2d=True)
     channels = data.shape[1]
-    channel_labels = {0: "L", 1: "R"}
 
     print(f"[AudioSR] loading model on {args.device}", flush=True)
     model = build_model(model_name=args.model_name, device=args.device)
 
+    if channels >= 2:
+        mid = (data[:, 0].astype(np.float64) + data[:, 1].astype(np.float64)) / 2.0
+        side = (data[:, 0].astype(np.float64) - data[:, 1].astype(np.float64)) / 2.0
+    else:
+        mid = data[:, 0].astype(np.float64)
+        side = None
+
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
-        upscaled_channels = []
-        for ch_index in range(channels):
-            upscaled = process_channel(
-                model,
-                data[:, ch_index],
-                orig_sr,
-                args.device,
-                args.ddim_steps,
-                args.guidance_scale,
-                args.seed,
-                args.overlap_seconds,
-                tmp_dir,
-                channel_labels.get(ch_index, str(ch_index)),
-            )
-            upscaled_channels.append(upscaled)
+        mid_ext = process_channel(
+            model,
+            mid,
+            orig_sr,
+            args.device,
+            args.ddim_steps,
+            args.guidance_scale,
+            args.seed,
+            args.overlap_seconds,
+            tmp_dir,
+            "M",
+        )
 
-    min_len = min(len(c) for c in upscaled_channels)
-    stereo = np.stack([c[:min_len] for c in upscaled_channels], axis=1)
+    if side is not None:
+        # Plain (non-generative) resample: preserves the source's real stereo
+        # width up to its original Nyquist, and is naturally silent above it
+        # -- so the newly-generated top end stays coherent (mono) across L/R.
+        side_tensor = torch.from_numpy(side).float()
+        side_resampled = torchaudio.functional.resample(side_tensor, orig_sr, TARGET_SR).numpy()
+        min_len = min(len(mid_ext), len(side_resampled))
+        mid_ext = mid_ext[:min_len]
+        side_resampled = side_resampled[:min_len].astype(np.float32)
+        stereo = np.stack([mid_ext + side_resampled, mid_ext - side_resampled], axis=1)
+    else:
+        stereo = mid_ext[:, None]
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
