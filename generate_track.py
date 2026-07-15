@@ -32,6 +32,7 @@ VRAM_RETRY_DURATION_STEP_SECONDS = 15.0
 DEFAULT_TARGET_LUFS = -16.0
 DEFAULT_TRUE_PEAK_DB = -1.5
 DEFAULT_LOUDNESS_RANGE = 11.0
+DEFAULT_FADE_OUT_SECONDS = 2.0
 _INTERMEDIATE_CODEC_ARGS = ["-c:a", "pcm_s24le", "-ar", "48000"]
 DEFAULT_STRUCTURE = "intro, chorus, verse, chorus, verse, outro"
 DEFAULT_TIME_SIGNATURE = "4"
@@ -39,6 +40,11 @@ QUALITY_PRESETS = {
     "best": {
         "model": "acestep-v15-sft",
         "steps": 50,
+        "guidance_scale": 7.0,
+    },
+    "extreme": {
+        "model": "acestep-v15-base",
+        "steps": 200,
         "guidance_scale": 7.0,
     },
     "ultra": {
@@ -99,6 +105,17 @@ MELODY_REGISTER_GUIDANCE = (
     "top-line synths, whistling leads, glassy high piano, squeaky strings, thin flutes, or "
     "repetitive high-frequency motifs. High frequencies should provide natural instrument air, "
     "drum detail, and room tone, not carry the main melody."
+)
+MINIMAL_ARRANGEMENT_GUIDANCE = (
+    "Keep the arrangement minimal, spacious, and uncluttered at every moment: only a few "
+    "clearly audible layers should play at once (for example drums, bass, one harmonic "
+    "layer, one melodic layer), never a dense wall of simultaneous parts. Every instrument "
+    "needs its own space in the mix with room to breathe; avoid stacking many competing "
+    "melodic or harmonic layers, avoid constant busy fills, and avoid thick pad or texture "
+    "layers that mask other instruments. It must still sound like a fully produced, "
+    "multi-layered real record rather than a stripped demo, achieved by adding and removing "
+    "individual layers across sections rather than piling everything on at once. Prioritize "
+    "clarity and space over density; when in doubt, leave a layer out."
 )
 SECTION_BLUEPRINT = [
     ("Intro", 0.12, "sparse setup, establish the core groove without full drums"),
@@ -319,14 +336,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail immediately on VRAM errors instead of retrying shorter durations.",
     )
+    parser.add_argument(
+        "--fade-out-seconds",
+        type=float,
+        default=DEFAULT_FADE_OUT_SECONDS,
+        help="Linear fade-out length at the end of each track. Default: 2.0s.",
+    )
+    parser.add_argument(
+        "--disable-fade-out",
+        action="store_true",
+        help="Skip the end-of-track fade-out and leave a hard cutoff.",
+    )
     parser.add_argument("--batch-size", type=int, default=None, help="Deprecated alias for --amount.")
     parser.add_argument(
         "--quality",
         default="balanced",
-        choices=["best", "ultra", "high", "balanced", "fast"],
+        choices=["best", "extreme", "ultra", "high", "balanced", "fast"],
         help=(
-            "Quality preset. best uses SFT; ultra/high use base+ADG; "
-            "balanced uses base faster; fast uses turbo."
+            "Quality preset. best uses SFT; extreme/ultra/high use base+ADG "
+            "at 200/100/64 steps; balanced uses base faster; fast uses turbo."
         ),
     )
     parser.add_argument(
@@ -554,6 +582,7 @@ def create_genre_prompt(
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
         f"{MIX_CLARITY_GUIDANCE} "
         f"{MELODY_REGISTER_GUIDANCE} "
+        f"{MINIMAL_ARRANGEMENT_GUIDANCE} "
         f"Avoid simple looping by changing drums, bass, harmony, melody, fills, and energy "
         f"between sections while staying coherent."
         f"{extra_detail}"
@@ -687,6 +716,7 @@ def build_generation_params(
         f"{NATURAL_INSTRUMENT_GUIDANCE} "
         f"{MIX_CLARITY_GUIDANCE} "
         f"{MELODY_REGISTER_GUIDANCE} "
+        f"{MINIMAL_ARRANGEMENT_GUIDANCE} "
         f"Drums must be on-beat, groovy, natural, and stylistically correct for {genre}. "
         "Use clear section changes, tasteful fills, realistic transitions, and evolving "
         "arrangement to avoid repetitive looping. Prefer a finished record feel over a loop."
@@ -895,6 +925,83 @@ def apply_clarity_mastering(path: str) -> bool:
                 temp_path.unlink()
             except OSError:
                 logger.warning("Could not remove temporary clarity file: {}", temp_path)
+
+
+def get_audio_duration(path: Path) -> float | None:
+    """Return an audio file's duration in seconds via ffprobe, or ``None`` on failure."""
+    if shutil.which("ffprobe") is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            timeout=30,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
+    try:
+        return float(proc.stdout.decode("utf-8", errors="ignore").strip())
+    except ValueError:
+        return None
+
+
+def apply_fade_out(path: str, fade_seconds: float) -> bool:
+    """Apply a linear fade-out over the last ``fade_seconds`` instead of a hard cutoff."""
+    if not path or fade_seconds <= 0:
+        return False
+    source_path = Path(path)
+    if not source_path.exists():
+        logger.warning("Fade-out skipped; file not found: {}", source_path)
+        return False
+    if shutil.which("ffmpeg") is None:
+        logger.warning("Fade-out skipped; ffmpeg is not available on PATH")
+        return False
+
+    duration = get_audio_duration(source_path)
+    if duration is None or duration <= fade_seconds:
+        logger.warning("Fade-out skipped; could not determine a usable duration for {}", source_path)
+        return False
+
+    fade_start = duration - fade_seconds
+    fade_filter = f"afade=t=out:st={fade_start:.3f}:d={fade_seconds}"
+    temp_path = source_path.with_name(f"{source_path.stem}.fade_tmp{source_path.suffix}")
+    try:
+        _run_ffmpeg(
+            [
+                "-i",
+                str(source_path),
+                "-af",
+                fade_filter,
+                *_INTERMEDIATE_CODEC_ARGS,
+                str(temp_path),
+            ]
+        )
+        temp_path.replace(source_path)
+        logger.info("Applied {}s fade-out: {}", fade_seconds, source_path)
+        return True
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
+        logger.warning("Fade-out failed for {}: {}", source_path, stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("Fade-out timed out for {}", source_path)
+        return False
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                logger.warning("Could not remove temporary fade file: {}", temp_path)
 
 
 def convert_wav_to_mp3(wav_path: str, bitrate: str, keep_wav: bool = False) -> str:
@@ -1125,6 +1232,9 @@ def main() -> int:
                 lufs_normalized = False
                 if not args.disable_lufs_normalization:
                     lufs_normalized = normalize_file_to_lufs(audio_path, args.target_lufs)
+                faded_out = False
+                if not args.disable_fade_out:
+                    faded_out = apply_fade_out(audio_path, args.fade_out_seconds)
                 track_number = track_index + offset + 1
                 renamed_path = rename_audio_file(audio_path, genre, track_number)
                 final_path = (
@@ -1147,6 +1257,8 @@ def main() -> int:
                         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
                         "clarity_mastered": clarity_mastered,
                         "lufs_normalized": lufs_normalized,
+                        "fade_out_seconds": None if args.disable_fade_out else args.fade_out_seconds,
+                        "faded_out": faded_out,
                     }
                 )
             if saved_count < 1:

@@ -124,6 +124,9 @@ uv run python generate_track.py --genre jazz --quality best --amount 1 --duratio
 
 uv run python generate_track.py --quality best --all-genres --amount 20  --duration 150 --concurrency 1 --format mp3 --target-lufs -14
 
+python generate_track.py --genre jazz --quality ultra --guidance-scale 3.5 --duration 150 --amount 1 --format mp3 --target-lufs -14
+
+python generate_track.py --quality ultra --guidance-scale 3.5 --duration 150 --all-genres --amount 20 --format mp3 --target-lufs -14 --concurrency 1
 
 ```
 
