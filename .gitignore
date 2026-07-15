@@ -242,6 +242,12 @@ PortableGit/
 proxy_config.txt
 gradio_outputs/
 acestep/third_parts/vllm/
+
+# Audio restoration/SR tools: vendored clone, isolated venvs, scratch outputs
+# (tools/apollo_infer.py and tools/audiosr_venv_infer.py stay tracked; see tools/README.md)
+tools/apollo/
+tools/audiosr_venv/
+tools/smoke_test_out/
 test_lora_scale_fix.py
 lokr_output/
 .claude/skills/acestep/scripts/config.json

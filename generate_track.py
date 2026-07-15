@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -26,13 +27,23 @@ from acestep.llm_inference import LLMHandler
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
+TOOLS_DIR = PROJECT_ROOT / "tools"
+APOLLO_DIR = TOOLS_DIR / "apollo"
+APOLLO_SCRIPT = TOOLS_DIR / "apollo_infer.py"
+AUDIOSR_DIR = TOOLS_DIR / "audiosr_venv"
+AUDIOSR_SCRIPT = TOOLS_DIR / "audiosr_venv_infer.py"
 MIN_DURATION_SECONDS = 120.0
 APPROX_DURATION_VARIANCE_SECONDS = 10.0
 VRAM_RETRY_DURATION_STEP_SECONDS = 15.0
-DEFAULT_TARGET_LUFS = -16.0
-DEFAULT_TRUE_PEAK_DB = -1.5
+DEFAULT_TARGET_LUFS = -14.0  # streaming delivery standard (Spotify/YouTube/Amazon reference level)
+DEFAULT_TRUE_PEAK_DB = -1.0  # streaming-safe true-peak ceiling (headroom for lossy re-encoding)
 DEFAULT_LOUDNESS_RANGE = 11.0
 DEFAULT_FADE_OUT_SECONDS = 2.0
+DEFAULT_TONE_PROFILE = "reference"
+# When the gain needed to hit the LUFS target would push true peak past the ceiling
+# minus this margin, the final stage switches from pure gain to gain + oversampled limiting.
+LOUDNESS_LIMITER_MARGIN_DB = 0.2
+MONO_BASS_CROSSOVER_HZ = 120  # below this the mix is summed to mono (LR4 split), like the reference
 _INTERMEDIATE_CODEC_ARGS = ["-c:a", "pcm_s24le", "-ar", "48000"]
 DEFAULT_STRUCTURE = "intro, chorus, verse, chorus, verse, outro"
 DEFAULT_TIME_SIGNATURE = "4"
@@ -70,12 +81,12 @@ QUALITY_PRESETS = {
 }
 MINOR_KEYS = [
     "A minor",
-    "A# minor",
+    "Bb minor",
     "B minor",
     "C minor",
     "C# minor",
     "D minor",
-    "D# minor",
+    "Eb minor",
     "E minor",
     "F minor",
     "F# minor",
@@ -107,6 +118,17 @@ ELECTRONIC_GENRES = {"deep house", "drum & bass", "electronic", "hip hop", "hous
 def resolve_instrument_guidance(genre: str) -> str:
     """Return live-instrument or produced-electronic guidance based on genre idiom."""
     return PRODUCED_INSTRUMENT_GUIDANCE if genre in ELECTRONIC_GENRES else NATURAL_INSTRUMENT_GUIDANCE
+
+
+def resolve_mix_guidance(args: argparse.Namespace) -> str:
+    """Pick the prompt-side mix direction that matches the mastering tone profile.
+
+    The 'reference' profile targets the reference track's signature: sub-forward,
+    warm, smooth/dark top. 'neutral' and 'bright' keep the original clarity-first
+    direction so generation and mastering always pull the same way.
+    """
+    profile = getattr(args, "tone_profile", DEFAULT_TONE_PROFILE)
+    return WARM_MIX_GUIDANCE if profile == "reference" else MIX_CLARITY_GUIDANCE
 MIX_CLARITY_GUIDANCE = (
     "Use a clean full-bandwidth mix with natural extended air, open cymbal detail, and defined "
     "transients. Do not brickwall, lowpass, band-limit, dull, or roll off the high-frequency "
@@ -119,6 +141,18 @@ MIX_CLARITY_GUIDANCE = (
     "rhythmic complexity but render every hit as a clean, distinct, well-separated transient; "
     "busy and syncopated must never mean blurred, grainy, hissy, or noisy. Complexity belongs "
     "in the rhythm and pattern, never in distortion or noise in the drum sound itself."
+)
+WARM_MIX_GUIDANCE = (
+    "Use a warm, full-bandwidth professional mix in the style of a modern commercial record: "
+    "a deep, powerful, well-controlled sub and low end that anchors the track, rich warm "
+    "low-mids, and a smooth, silky, slightly dark top end. High frequencies should sound "
+    "natural, soft, and expensive -- airy but never bright, crisp, fizzy, brittle, piercing, "
+    "or hyped. Cymbals, hi-hats, and percussion must be smooth and detailed with clean, "
+    "distinct transients, never harsh, grainy, noisy, or smeared. Keep the bass and kick "
+    "mono-compatible and centered, with stereo width used for pads, ambience, and air rather "
+    "than low end. Avoid low-bitrate, watery, phasey, over-compressed, or lo-fi codec "
+    "artifacts; the mix should sound like a polished, warm, radio-ready master, not a bright "
+    "or clinical one."
 )
 MELODY_REGISTER_GUIDANCE = (
     "Keep melodies, hooks, leads, solos, arpeggios, and ornamental phrases in a warm mid-range "
@@ -142,11 +176,31 @@ MINIMAL_ARRANGEMENT_GUIDANCE = (
     "disciplined arrangement and mixing skill, never by making individual parts sound "
     "simple, empty, or unpolished."
 )
-COMPACT_PRODUCTION_GUIDANCE = (
-    "Professional studio production: steady unbroken groove at a constant tempo "
-    "through every section, clean separated transients, uncluttered arrangement "
-    "with a few purposeful layers, melodies in a warm mid register, wide natural "
-    "stereo image, crisp detailed airy top end."
+PERFORMANCE_SKILL_GUIDANCE = (
+    "Every instrument must be performed by expert, professional session musicians with "
+    "confident, precise technique: accurate pitch and intonation, steady confident timing, "
+    "controlled dynamics, and musically mature phrasing. Do not sound like a beginner, "
+    "student, child, or amateur hobbyist playing; avoid hesitant, wobbly, out-of-tune, "
+    "rushed, or uncertain-sounding performances. Riffs, melodies, and solos should sound "
+    "deliberate and skillfully executed, not simplistic, tentative, or naive."
+)
+MUSICALITY_GUIDANCE = (
+    "Write real musical content, not a static loop: use a chord progression that actually "
+    "moves and resolves rather than droning on one chord or note, with occasional passing "
+    "chords or secondary harmony idiomatic to the genre. Give melodies a clear shape -- a "
+    "beginning, a rise, and a resolution -- instead of repeating the same one or two notes. "
+    "Vary dynamics and energy across the arrangement so choruses feel like a lift and verses "
+    "feel like a pull-back. Use call-and-response phrasing between instruments and small "
+    "melodic variations between repeats so the harmony and melody feel composed, not looped."
+)
+# Short fallback quality nudge for the final DiT caption when no LM-authored caption is
+# available. Training captions read as one natural paragraph (~80-120 words); the DiT
+# text encoder was never shown directive/checklist-style prompts, so keep this brief
+# rather than concatenating the long guidance blocks above (those are for the LM query
+# in create_genre_prompt, which is expected to condense them into natural prose).
+CONCISE_QUALITY_HINT = (
+    "Performed by skilled professional musicians with a clean, polished mix, real chord "
+    "movement, and dynamic contrast between sections rather than a static loop."
 )
 SECTION_BLUEPRINT = [
     ("Intro", 0.12, "sparse setup over the same steady pulse, hinting the groove"),
@@ -159,7 +213,10 @@ SECTION_BLUEPRINT = [
 TITLE_WORDS = {
     "afropop": ["sunrise", "lagos", "golden", "palm", "market", "joy", "highlife"],
     "arabic": ["oud", "desert", "moon", "maqam", "cairo", "silk", "dawn"],
+    "calm jazzy piano": ["nocturne", "candlelight", "velvet", "hush", "lullaby", "twilight", "reverie"],
+    "celtic": ["emerald", "highland", "misty", "glen", "windward", "ancient", "moor"],
     "chill": ["midnight", "soft", "drift", "haze", "quiet", "cloud", "afterglow"],
+    "country": ["dust", "highway", "porch", "whiskey", "hometown", "backroad", "sundown"],
     "deep house": ["basement", "velvet", "night", "pulse", "subway", "afterhours", "shadow"],
     "drum & bass": ["break", "sub", "rush", "jungle", "night", "pressure", "motion"],
     "electronic": ["neon", "signal", "circuit", "chrome", "future", "voltage", "motion"],
@@ -197,7 +254,10 @@ DEFAULT_INSTRUMENTAL_LYRICS = "\n".join(
 GENRES = [
     "afropop",
     "arabic",
+    "calm jazzy piano",
+    "celtic",
     "chill",
+    "country",
     "deep house",
     "drum & bass",
     "electronic",
@@ -234,6 +294,27 @@ GENRE_PROFILES = {
         "bpm": 96,
         "bpm_range": (78, 112),
     },
+    "calm jazzy piano": {
+        "caption": (
+            "solo jazz piano performance with soft brushed rhythm section support: "
+            "expressive rubato piano lead, warm upright bass, brushed drum kit played "
+            "very softly, occasional muted trumpet or saxophone coloring, intimate "
+            "late-night lounge recording with natural room ambience and a calm, "
+            "relaxed, introspective mood"
+        ),
+        "bpm": 70,
+        "bpm_range": (56, 88),
+    },
+    "celtic": {
+        "caption": (
+            "Celtic folk ensemble: lyrical fiddle lead, wooden tin whistle, warm "
+            "acoustic guitar, bodhran hand drum, and occasional Celtic harp, "
+            "close-miked traditional Irish session recording with natural room "
+            "ambience, wide stereo image, and a lilting, danceable folk groove"
+        ),
+        "bpm": 110,
+        "bpm_range": (86, 128),
+    },
     "chill": {
         "caption": (
             "chill downtempo trio: soft electric piano, one mellow pad, relaxed sparse "
@@ -242,6 +323,17 @@ GENRE_PROFILES = {
         ),
         "bpm": 82,
         "bpm_range": (72, 92),
+    },
+    "country": {
+        "caption": (
+            "country song performed by a small live band: bright acoustic and "
+            "electric guitar interplay, weeping pedal steel guitar, warm upright or "
+            "electric bass, a tight brushed drum kit, and occasional fiddle accents, "
+            "close-miked with a warm Nashville studio sound, wide natural stereo "
+            "image and a heartfelt storytelling groove"
+        ),
+        "bpm": 100,
+        "bpm_range": (76, 130),
     },
     "deep house": {
         "caption": (
@@ -365,7 +457,30 @@ GENRE_PROFILES = {
         "bpm_range": (88, 120),
     },
 }
- 
+
+ARTIST_REFERENCES = {
+    "afropop": ["Burna Boy", "Wizkid", "Davido", "Tiwa Savage", "Yemi Alade"],
+    "arabic": ["Amr Diab", "Fairuz", "Nancy Ajram", "Saad Lamjarred", "Elissa"],
+    "calm jazzy piano": ["Bill Evans", "Brad Mehldau", "Keith Jarrett", "Ryuichi Sakamoto", "Yiruma"],
+    "celtic": ["Enya", "The Chieftains", "Clannad", "Loreena McKennitt", "Altan"],
+    "chill": ["Bonobo", "Tycho", "Jinsang", "Rhye", "Kiasmos"],
+    "country": ["Chris Stapleton", "Luke Combs", "Kacey Musgraves", "Zach Bryan", "Miranda Lambert"],
+    "deep house": ["Black Coffee", "Disclosure", "Lane 8", "Bonobo", "Kerri Chandler"],
+    "drum & bass": ["Netsky", "Sub Focus", "Andy C", "High Contrast", "Pendulum"],
+    "electronic": ["ODESZA", "Flume", "RUFUS DU SOL", "Kaskade", "Porter Robinson"],
+    "funk": ["Bruno Mars", "Vulfpeck", "Cory Wong", "Earth, Wind & Fire", "Chromeo"],
+    "hip hop": ["Kendrick Lamar", "J. Cole", "Drake", "Travis Scott", "Nas"],
+    "house": ["Fisher", "Disclosure", "Duke Dumont", "Purple Disco Machine", "CamelPhat"],
+    "indian": ["A.R. Rahman", "Shreya Ghoshal", "Arijit Singh", "Nusrat Fateh Ali Khan", "Ravi Shankar"],
+    "jazz": ["Miles Davis", "John Coltrane", "Herbie Hancock", "Norah Jones", "Diana Krall"],
+    "pop": ["Taylor Swift", "Dua Lipa", "Ed Sheeran", "The Weeknd", "Ariana Grande"],
+    "r&b": ["SZA", "Frank Ocean", "H.E.R.", "Daniel Caesar", "Summer Walker"],
+    "reggae": ["Bob Marley", "Chronixx", "Damian Marley", "Sean Paul", "Protoje"],
+    "soul": ["Aretha Franklin", "Sam Cooke", "Anderson .Paak", "Leon Bridges", "Amy Winehouse"],
+    "spanish": ["Rosalia", "Bad Bunny", "Shakira", "Manu Chao", "Alejandro Sanz"],
+}
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line options for one-shot track generation."""
     parser = argparse.ArgumentParser(description="Generate a track with ACE-Step.")
@@ -384,6 +499,23 @@ def parse_args() -> argparse.Namespace:
         "--all-genres",
         action="store_true",
         help="Generate for every built-in genre. --amount applies per genre.",
+    )
+    parser.add_argument(
+        "--cover",
+        action="store_true",
+        help=(
+            "Add a real-artist style reference (\"<artist> type beat\") to the "
+            "generation prompt for closer genre-matching production style. Picks a "
+            "random well-known artist for the genre unless --artist is given. This "
+            "steers instrumentation/mood only -- the model has no knowledge of the "
+            "artist's actual catalog, so output will not sound like the artist's "
+            "voice or any specific real song."
+        ),
+    )
+    parser.add_argument(
+        "--artist",
+        default=None,
+        help="Specific artist name to reference with --cover. Random per-genre pick if omitted.",
     )
     parser.add_argument(
         "--lyrics",
@@ -420,17 +552,86 @@ def parse_args() -> argparse.Namespace:
         "--target-lufs",
         type=float,
         default=DEFAULT_TARGET_LUFS,
-        help="Post-export integrated loudness target. Default: -16 LUFS.",
+        help="Post-export integrated loudness target. Default: -14 LUFS.",
+    )
+    parser.add_argument(
+        "--true-peak-db",
+        type=float,
+        default=DEFAULT_TRUE_PEAK_DB,
+        help=(
+            "True-peak ceiling for the final limiting stage, in dBTP. Default: -1.0 "
+            "(streaming-safe; leaves headroom for lossy re-encoding)."
+        ),
     )
     parser.add_argument(
         "--disable-lufs-normalization",
         action="store_true",
-        help="Skip the post-export ffmpeg loudnorm pass.",
+        help="Skip the final loudness stage (gain to target LUFS + true-peak limiting).",
+    )
+    parser.add_argument(
+        "--tone-profile",
+        default=DEFAULT_TONE_PROFILE,
+        choices=list(TONE_PROFILE_NAMES),
+        help=(
+            "Mastering tone profile. 'reference' matches the analyzed reference master "
+            "(sub-forward, warm, smooth dark top, mono bass); 'neutral' is corrective "
+            "only; 'bright' is the previous clarity/exciter chain. Default: reference."
+        ),
     )
     parser.add_argument(
         "--disable-clarity-mastering",
         action="store_true",
-        help="Skip the post-export EQ/limiter pass that reduces foggy AI highs.",
+        help="Skip the tone-mastering pass (EQ, dynamic de-harsh, mono-bass crossover).",
+    )
+    parser.add_argument(
+        "--enable-apollo-restoration",
+        action="store_true",
+        help=(
+            "Run the isolated Apollo model (tools/apollo) to de-smear/restore audio "
+            "before mastering. Requires the separate Apollo env to be set up."
+        ),
+    )
+    parser.add_argument(
+        "--apollo-checkpoint",
+        default="restore",
+        choices=["restore", "vocal", "vocal2", "universal"],
+        help="Apollo checkpoint to use. 'restore' is the general codec de-smear model.",
+    )
+    parser.add_argument(
+        "--enable-audiosr-upscale",
+        action="store_true",
+        help=(
+            "Run the isolated AudioSR model (tools/audiosr_venv) to extend bandwidth to "
+            "~24 kHz (48 kHz output) before mastering. Requires the separate AudioSR env "
+            "to be set up; adds significant runtime per track."
+        ),
+    )
+    parser.add_argument(
+        "--audiosr-model",
+        default="basic",
+        choices=["basic", "speech"],
+        help="AudioSR checkpoint to use.",
+    )
+    parser.add_argument(
+        "--audiosr-ddim-steps",
+        type=int,
+        default=25,
+        help=(
+            "AudioSR DDIM sampling steps. Lower is faster but lower quality. Default "
+            "halved from the library's own default of 50 -- 25 is a fast/quality "
+            "middle ground for bandwidth extension (not generative content)."
+        ),
+    )
+    parser.add_argument(
+        "--audiosr-guidance-scale",
+        type=float,
+        default=3.5,
+        help=(
+            "AudioSR classifier-free guidance scale. AudioSR runs a second "
+            "(unconditional) forward pass per DDIM step whenever this is not exactly "
+            "1.0, roughly doubling per-step cost -- set to 1.0 to disable guidance "
+            "and roughly halve runtime again, at some cost to output relevance/quality."
+        ),
     )
     parser.add_argument(
         "--disable-vram-duration-retry",
@@ -666,6 +867,7 @@ def create_genre_prompt(
     track_index: int,
     duration: float,
     keyscale: str,
+    cover_artist: str | None = None,
 ) -> dict[str, object]:
     """Create a fresh genre-matched prompt with the existing 5Hz LM API."""
     if args.no_smart_prompt:
@@ -687,12 +889,15 @@ def create_genre_prompt(
         f"{resolve_instrument_guidance(genre)} "
         f"Keep the rhythm locked to {profile['bpm']} BPM in 4/4. Drums must be on-beat, "
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
-        f"{MIX_CLARITY_GUIDANCE} "
+        f"{resolve_mix_guidance(args)} "
         f"{MELODY_REGISTER_GUIDANCE} "
         f"{MINIMAL_ARRANGEMENT_GUIDANCE} "
+        f"{PERFORMANCE_SKILL_GUIDANCE} "
+        f"{MUSICALITY_GUIDANCE} "
         f"Avoid simple looping by changing drums, bass, harmony, melody, fills, and energy "
         f"between sections while staying coherent."
         f"{extra_detail}"
+        f"{cover_style_guidance(cover_artist)}"
     )
     sample = create_sample(
         llm_handler=llm_handler,
@@ -749,6 +954,28 @@ def resolve_genre_bpm(args: argparse.Namespace, genre: str, sample: dict[str, ob
     return random.randint(int(low), int(high))
 
 
+def resolve_cover_artist(args: argparse.Namespace, genre: str) -> str | None:
+    """Return a real-artist style reference name for --cover prompting, or None."""
+    if not args.cover:
+        return None
+    if args.artist:
+        return args.artist
+    candidates = ARTIST_REFERENCES.get(genre, [])
+    if not candidates:
+        return None
+    return random.choice(candidates)
+
+
+def cover_style_guidance(artist: str | None) -> str:
+    """Return a caption fragment steering generation toward an artist's style."""
+    if not artist:
+        return ""
+    return (
+        f" Style reference: {artist} type beat, matching their signature production "
+        "style, instrumentation, and mood, without copying any specific existing song."
+    )
+
+
 def format_seconds(seconds: float) -> str:
     """Format seconds as compact m:ss text for section guidance."""
     total_seconds = max(0, int(round(seconds)))
@@ -794,12 +1021,10 @@ def build_generation_params(
     sample: dict[str, object],
     duration: float,
     keyscale: str,
+    cover_artist: str | None = None,
 ) -> GenerationParams:
     """Build generation parameters from parsed command-line options."""
     profile = GENRE_PROFILES[genre]
-    caption = str(sample.get("caption") or profile["caption"])
-    if args.prompt.strip() and not sample:
-        caption = f"{caption}, {args.prompt.strip()}"
 
     if args.duration < MIN_DURATION_SECONDS:
         logger.warning(
@@ -813,13 +1038,24 @@ def build_generation_params(
         if args.allow_smart_metadata
         else DEFAULT_TIME_SIGNATURE
     )
+
+    # bpm/keyscale/timesignature/duration are conditioned via their own GenerationParams
+    # fields below (matching the training data's separate JSON fields) -- do not restate
+    # them as caption text, and do not embed literal section timestamps in the caption;
+    # both are out-of-distribution for the caption text encoder, which only ever saw
+    # natural single-paragraph song descriptions (~80-120 words) during training.
+    smart_caption = str(sample.get("caption") or "").strip()
+    if smart_caption:
+        caption = smart_caption
+    else:
+        caption = profile["caption"]
+        if args.prompt.strip():
+            caption = f"{caption}, {args.prompt.strip()}"
+        caption = f"{caption}. {CONCISE_QUALITY_HINT}"
+
     caption = (
-        f"{genre} genre lock: {profile['caption']}. {caption}. "
-        f"Fully instrumental with no sung or spoken vocals. "
-        f"Structure: {build_section_plan_text(duration)}. "
-        f"Fixed tempo {locked_bpm} BPM, {time_signature}/4 time, exact key {keyscale}, "
-        "staying in this minor key throughout. "
-        f"{COMPACT_PRODUCTION_GUIDANCE}"
+        f"{caption.rstrip('.')}, fully instrumental with no sung or spoken vocals."
+        f"{cover_style_guidance(cover_artist)}"
     )
 
     return GenerationParams(
@@ -919,32 +1155,65 @@ def measure_loudness(path: Path, target_lufs: float) -> dict | None:
         return None
 
 
-def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
-    """Two-pass linear loudness normalization using static gain."""
+def finalize_loudness(
+    path: str,
+    target_lufs: float,
+    true_peak_db: float = DEFAULT_TRUE_PEAK_DB,
+) -> bool:
+    """Final loudness stage: static gain to target LUFS, limiting only when needed.
+
+    This is the mastering-engineer approach rather than loudnorm's linear mode:
+    loudnorm with ``linear=true`` silently under-gains whenever the true-peak
+    ceiling would be exceeded, so peaky tracks landed quieter than the target.
+    Here the gain to hit the integrated target is always applied; if that would
+    push the true peak past the ceiling, a 4x-oversampled limiter (true-peak
+    aware in practice) catches only the overs. This must run *after* the tone
+    stage and the fade-out so the measurement reflects the final audio.
+    """
     if not path:
         return False
     source_path = Path(path)
     if not source_path.exists():
-        logger.warning("LUFS normalization skipped; file not found: {}", source_path)
+        logger.warning("Loudness finalization skipped; file not found: {}", source_path)
         return False
     if shutil.which("ffmpeg") is None:
-        logger.warning("LUFS normalization skipped; ffmpeg is not available on PATH")
+        logger.warning("Loudness finalization skipped; ffmpeg is not available on PATH")
         return False
 
     measured = measure_loudness(source_path, target_lufs)
     if measured is None:
         return False
+    try:
+        input_i = float(measured["input_i"])
+        input_tp = float(measured["input_tp"])
+    except (KeyError, TypeError, ValueError):
+        logger.warning("Loudness finalization skipped; unusable measurement for {}", source_path)
+        return False
+    if not (-70.0 < input_i < 10.0):
+        logger.warning(
+            "Loudness finalization skipped; measured {} LUFS looks like silence: {}",
+            input_i,
+            source_path,
+        )
+        return False
 
-    loudnorm = (
-        f"loudnorm=I={target_lufs}:TP={DEFAULT_TRUE_PEAK_DB}:"
-        f"LRA={DEFAULT_LOUDNESS_RANGE}:"
-        f"measured_I={measured['input_i']}:"
-        f"measured_TP={measured['input_tp']}:"
-        f"measured_LRA={measured['input_lra']}:"
-        f"measured_thresh={measured['input_thresh']}:"
-        f"offset={measured.get('target_offset', 0)}:"
-        f"linear=true"
-    )
+    gain_db = target_lufs - input_i
+    predicted_tp = input_tp + gain_db
+    if predicted_tp <= true_peak_db - LOUDNESS_LIMITER_MARGIN_DB:
+        audio_filter = f"volume={gain_db:.2f}dB"
+        mode = "pure gain"
+    else:
+        # Limit 0.1 dB below the ceiling: the 192 kHz-domain limiter is true-peak
+        # accurate, but the final downsample to 48 kHz can reconstruct ~0.05 dB over.
+        limit_linear = 10.0 ** ((true_peak_db - 0.1) / 20.0)
+        audio_filter = (
+            f"volume={gain_db:.2f}dB,"
+            f"aresample=192000,"
+            f"alimiter=limit={limit_linear:.6f}:attack=2:release=120:level=false,"
+            f"aresample=48000"
+        )
+        mode = f"gain + limiter at {true_peak_db:.1f} dBTP"
+
     temp_path = source_path.with_name(f"{source_path.stem}.lufs_tmp{source_path.suffix}")
     try:
         _run_ffmpeg(
@@ -952,20 +1221,27 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
                 "-i",
                 str(source_path),
                 "-af",
-                loudnorm,
+                audio_filter,
                 *_INTERMEDIATE_CODEC_ARGS,
                 str(temp_path),
-            ]
+            ],
+            timeout=300,
         )
         temp_path.replace(source_path)
-        logger.info("Linear-normalized to {} LUFS: {}", target_lufs, source_path)
+        logger.info(
+            "Finalized loudness to {} LUFS ({}; {:+.2f} dB): {}",
+            target_lufs,
+            mode,
+            gain_db,
+            source_path,
+        )
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
-        logger.warning("LUFS normalization failed for {}: {}", source_path, stderr)
+        logger.warning("Loudness finalization failed for {}: {}", source_path, stderr)
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("LUFS normalization timed out for {}", source_path)
+        logger.warning("Loudness finalization timed out for {}", source_path)
         return False
     finally:
         if temp_path.exists():
@@ -975,61 +1251,279 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
                 logger.warning("Could not remove temporary LUFS file: {}", temp_path)
 
 
-def apply_clarity_mastering(path: str) -> bool:
-    """Apply corrective EQ, dynamic HF control, excitation, and safety limiting."""
-    if not path:
-        return False
-    source_path = Path(path)
-    if not source_path.exists():
-        logger.warning("Clarity mastering skipped; file not found: {}", source_path)
-        return False
-    if shutil.which("ffmpeg") is None:
-        logger.warning("Clarity mastering skipped; ffmpeg is not available on PATH")
-        return False
+def _mono_bass_split(inner_chain: str) -> str:
+    """Wrap a filter chain in an LR4 crossover that sums lows to mono.
 
-    clarity_filter = ",".join(
-        [
+    Two cascaded 2nd-order Butterworth sections per band form a Linkwitz-Riley 4th-order
+    crossover, so the recombined bands sum flat. Everything below the crossover is
+    center-panned -- standard practice on commercial masters (and what the reference does).
+    """
+    xo = MONO_BASS_CROSSOVER_HZ
+    return (
+        f"[0:a]asplit=2[lo_in][hi_in];"
+        f"[lo_in]lowpass=f={xo}:p=2,lowpass=f={xo}:p=2,"
+        f"pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1[lo];"
+        f"[hi_in]highpass=f={xo}:p=2,highpass=f={xo}:p=2[hi];"
+        f"[lo][hi]amix=inputs=2:normalize=0,{inner_chain}[out]"
+    )
+
+
+TONE_PROFILE_NAMES = ("reference", "neutral", "bright")
+_DYNEQ_LEGACY_SYNTAX: bool | None = None
+
+
+def _dyneq_uses_legacy_syntax() -> bool:
+    """Detect whether this ffmpeg's adynamicequalizer uses 5.x or 6.x option names.
+
+    ffmpeg 5.x: ``mode=cutabove``. ffmpeg 6+: ``mode=cut:direction=downward``.
+    The old hardcoded 'cutabove' made the entire mastering pass fail (and be
+    silently skipped) on ffmpeg 6 and newer.
+    """
+    global _DYNEQ_LEGACY_SYNTAX
+    if _DYNEQ_LEGACY_SYNTAX is None:
+        try:
+            proc = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-h", "filter=adynamicequalizer"],
+                capture_output=True,
+                timeout=15,
+            )
+            _DYNEQ_LEGACY_SYNTAX = b"cutabove" in proc.stdout + proc.stderr
+        except (OSError, subprocess.TimeoutExpired):
+            _DYNEQ_LEGACY_SYNTAX = False
+    return _DYNEQ_LEGACY_SYNTAX
+
+
+def _dyneq_deharsh(threshold: float, freq: int, q: float, ratio: float, range_db: float) -> str:
+    """Build a downward dynamic-EQ band with version-appropriate syntax."""
+    base = (
+        f"adynamicequalizer=threshold={threshold}:dfrequency={freq}:dqfactor={q}:"
+        f"tfrequency={freq}:tqfactor={q}:ratio={ratio}:range={range_db}:"
+        f"attack=8:release=140"
+    )
+    if _dyneq_uses_legacy_syntax():
+        return f"{base}:mode=cutabove"
+    return f"{base}:mode=cut:direction=downward"
+
+
+def build_tone_profile_chain(profile: str) -> str:
+    """Tone-shaping chains derived from spectral analysis of the reference master
+    (heavenly.mp3): sub-forward low end, mono bass, controlled 300 Hz region, soft
+    presence, smooth top rolling off ~14 kHz, width concentrated in the air band.
+    No chain limits or clips -- final dynamics control happens exactly once, at the
+    loudness stage, after the fade-out.
+    """
+    if profile == "reference":
+        # Matches the reference: warm, sub-weighted, dark-smooth top, de-harshed AI highs.
+        stages = [
+            "highpass=f=20:p=2",  # DC/rumble only -- the reference keeps deep sub energy
+            "bass=g=1.5:f=90:w=0.6",  # sub/low-bass weight
+            "equalizer=f=350:t=q:w=1.4:g=-1.5",  # clear mud so the added sub stays defined
+            _dyneq_deharsh(10, 7500, 0.8, 2.5, 5),  # tames AI fizz only when it flares up
+            "treble=g=-1.5:f=13500:w=0.5",  # gentle dark tilt like the reference's soft top
+        ]
+    elif profile == "bright":
+        # Previous clarity-first behavior (minus the premature limiter).
+        stages = [
             "highpass=f=28",
             "equalizer=f=240:t=q:w=1.8:g=-2.5",
             "equalizer=f=3200:t=q:w=0.8:g=0.7",
             "equalizer=f=5500:t=q:w=0.8:g=0.8",
-            (
-                "adynamicequalizer=threshold=12:dfrequency=10000:dqfactor=0.5:"
-                "tfrequency=10000:tqfactor=0.5:ratio=2:range=6:"
-                "attack=10:release=150:mode=cutabove"
-            ),
+            _dyneq_deharsh(12, 10000, 0.5, 2, 6),
             "aexciter=amount=1.4:drive=4:blend=0:freq=7500:ceil=15500",
-            "alimiter=limit=0.97:attack=5:release=50:level=false",
         ]
-    )
+    else:
+        # Flat, corrective-only: safe default for unknown material.
+        stages = [
+            "highpass=f=24:p=2",
+            "equalizer=f=300:t=q:w=1.4:g=-1.2",
+            _dyneq_deharsh(11, 8500, 0.7, 2, 5),
+        ]
+    return ",".join(stages)
+
+
+def apply_tone_mastering(path: str, profile: str = DEFAULT_TONE_PROFILE) -> bool:
+    """Apply the tone-shaping stage (EQ + dynamic de-harsh + mono bass, no limiting)."""
+    if not path:
+        return False
+    source_path = Path(path)
+    if not source_path.exists():
+        logger.warning("Tone mastering skipped; file not found: {}", source_path)
+        return False
+    if shutil.which("ffmpeg") is None:
+        logger.warning("Tone mastering skipped; ffmpeg is not available on PATH")
+        return False
+
+    if profile not in TONE_PROFILE_NAMES:
+        profile = DEFAULT_TONE_PROFILE
+    inner_chain = build_tone_profile_chain(profile)
+    filter_complex = _mono_bass_split(inner_chain)
     temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
     try:
         _run_ffmpeg(
             [
                 "-i",
                 str(source_path),
-                "-af",
-                clarity_filter,
+                "-filter_complex",
+                filter_complex,
+                "-map",
+                "[out]",
                 *_INTERMEDIATE_CODEC_ARGS,
                 str(temp_path),
             ]
         )
         temp_path.replace(source_path)
-        logger.info("Applied mastering chain (EQ + dynEQ + exciter + limiter): {}", source_path)
+        logger.info("Applied tone mastering ('{}' profile, mono-bass LR4): {}", profile, source_path)
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
-        logger.warning("Clarity mastering failed for {}: {}", source_path, stderr)
+        logger.warning("Tone mastering failed for {}: {}", source_path, stderr)
         return False
     except subprocess.TimeoutExpired:
-        logger.warning("Clarity mastering timed out for {}", source_path)
+        logger.warning("Tone mastering timed out for {}", source_path)
         return False
     finally:
         if temp_path.exists():
             try:
                 temp_path.unlink()
             except OSError:
-                logger.warning("Could not remove temporary clarity file: {}", temp_path)
+                logger.warning("Could not remove temporary tone-mastering file: {}", temp_path)
+
+
+def _venv_python(venv_dir: Path) -> Path:
+    """Return an isolated venv's python executable, Windows or POSIX layout."""
+    windows_path = venv_dir / "Scripts" / "python.exe"
+    if windows_path.exists():
+        return windows_path
+    return venv_dir / "bin" / "python"
+
+
+def _run_subprocess_streaming(command: list[str], timeout: int) -> tuple[int, str]:
+    """Run a subprocess, echoing its output live instead of buffering it silently."""
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    lines: list[str] = []
+
+    def _pump() -> None:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.append(line)
+            print(line, end="", flush=True)
+
+    pump_thread = threading.Thread(target=_pump, daemon=True)
+    pump_thread.start()
+    try:
+        returncode = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        pump_thread.join(timeout=5)
+        raise
+    pump_thread.join(timeout=5)
+    return returncode, "".join(lines)
+
+
+def apply_apollo_restoration(path: str, checkpoint: str = "restore") -> bool:
+    """Run the isolated Apollo model to de-smear/restore codec-damaged audio."""
+    if not path:
+        return False
+    source_path = Path(path).resolve()
+    if not source_path.exists():
+        logger.warning("Apollo restoration skipped; file not found: {}", source_path)
+        return False
+    python_exe = _venv_python(APOLLO_DIR / ".venv")
+    if not python_exe.exists() or not APOLLO_SCRIPT.exists():
+        logger.warning("Apollo restoration skipped; isolated env not found at {}", python_exe)
+        return False
+
+    temp_path = source_path.with_name(f"{source_path.stem}.apollo_tmp{source_path.suffix}")
+    try:
+        returncode, output = _run_subprocess_streaming(
+            [
+                str(python_exe),
+                str(APOLLO_SCRIPT),
+                "--input",
+                str(source_path),
+                "--output",
+                str(temp_path),
+                "--checkpoint",
+                checkpoint,
+            ],
+            timeout=900,
+        )
+        if returncode != 0:
+            logger.warning("Apollo restoration failed for {}: {}", source_path, output)
+            return False
+        temp_path.replace(source_path)
+        logger.info("Applied Apollo restoration ({}): {}", checkpoint, source_path)
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("Apollo restoration timed out for {}", source_path)
+        return False
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                logger.warning("Could not remove temporary Apollo file: {}", temp_path)
+
+
+def apply_audiosr_upscale(
+    path: str,
+    model_name: str = "basic",
+    ddim_steps: int = 25,
+    guidance_scale: float = 3.5,
+) -> bool:
+    """Run the isolated AudioSR model to extend bandwidth to ~24 kHz (48 kHz output)."""
+    if not path:
+        return False
+    source_path = Path(path).resolve()
+    if not source_path.exists():
+        logger.warning("AudioSR upscale skipped; file not found: {}", source_path)
+        return False
+    python_exe = _venv_python(AUDIOSR_DIR)
+    if not python_exe.exists() or not AUDIOSR_SCRIPT.exists():
+        logger.warning("AudioSR upscale skipped; isolated env not found at {}", python_exe)
+        return False
+
+    temp_path = source_path.with_name(f"{source_path.stem}.audiosr_tmp{source_path.suffix}")
+    try:
+        returncode, output = _run_subprocess_streaming(
+            [
+                str(python_exe),
+                str(AUDIOSR_SCRIPT),
+                "--input",
+                str(source_path),
+                "--output",
+                str(temp_path),
+                "--model-name",
+                model_name,
+                "--ddim-steps",
+                str(ddim_steps),
+                "--guidance-scale",
+                str(guidance_scale),
+            ],
+            timeout=3600,
+        )
+        if returncode != 0:
+            logger.warning("AudioSR upscale failed for {}: {}", source_path, output)
+            return False
+        temp_path.replace(source_path)
+        logger.info("Applied AudioSR bandwidth extension: {}", source_path)
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("AudioSR upscale timed out for {}", source_path)
+        return False
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                logger.warning("Could not remove temporary AudioSR file: {}", temp_path)
 
 
 def get_audio_duration(path: Path) -> float | None:
@@ -1078,7 +1572,7 @@ def apply_fade_out(path: str, fade_seconds: float) -> bool:
         return False
 
     fade_start = duration - fade_seconds
-    fade_filter = f"afade=t=out:st={fade_start:.3f}:d={fade_seconds}"
+    fade_filter = f"afade=t=out:st={fade_start:.3f}:d={fade_seconds}:curve=qsin"
     temp_path = source_path.with_name(f"{source_path.stem}.fade_tmp{source_path.suffix}")
     try:
         _run_ffmpeg(
@@ -1136,6 +1630,8 @@ def convert_wav_to_mp3(wav_path: str, bitrate: str, keep_wav: bool = False) -> s
         bitrate,
         "-ar",
         "48000",
+        "-id3v2_version",
+        "3",
         str(mp3_path),
     ]
     try:
@@ -1239,12 +1735,20 @@ def generate_track_chunk(
 ):
     """Generate one chunk, retrying with shorter durations on VRAM pressure."""
     duration = initial_duration
+    cover_artist = resolve_cover_artist(args, genre)
+    if cover_artist:
+        logger.info(
+            "Cover style reference: {} type beat (style-inspired only, not a literal cover)",
+            cover_artist,
+        )
     while True:
-        sample = create_genre_prompt(llm_handler, args, genre, track_index, duration, keyscale)
+        sample = create_genre_prompt(
+            llm_handler, args, genre, track_index, duration, keyscale, cover_artist
+        )
         result = generate_music(
             dit_handler=dit_handler,
             llm_handler=llm_handler,
-            params=build_generation_params(args, genre, sample, duration, keyscale),
+            params=build_generation_params(args, genre, sample, duration, keyscale, cover_artist),
             config=build_generation_config_for_track(args, track_index, chunk_size, seed_offset),
             save_dir=str(save_dir),
         )
@@ -1331,15 +1835,30 @@ def main() -> int:
             saved_count = len(result.audios)
             for offset, audio in enumerate(result.audios):
                 audio_path = audio.get("path", "")
+                apollo_restored = False
+                if args.enable_apollo_restoration:
+                    apollo_restored = apply_apollo_restoration(audio_path, args.apollo_checkpoint)
+                audiosr_upscaled = False
+                if args.enable_audiosr_upscale:
+                    audiosr_upscaled = apply_audiosr_upscale(
+                        audio_path,
+                        args.audiosr_model,
+                        args.audiosr_ddim_steps,
+                        args.audiosr_guidance_scale,
+                    )
                 clarity_mastered = False
                 if not args.disable_clarity_mastering:
-                    clarity_mastered = apply_clarity_mastering(audio_path)
-                lufs_normalized = False
-                if not args.disable_lufs_normalization:
-                    lufs_normalized = normalize_file_to_lufs(audio_path, args.target_lufs)
+                    clarity_mastered = apply_tone_mastering(audio_path, args.tone_profile)
                 faded_out = False
                 if not args.disable_fade_out:
                     faded_out = apply_fade_out(audio_path, args.fade_out_seconds)
+                # Loudness runs last so the integrated/true-peak measurement is of the
+                # exact audio being delivered (tone-shaped and faded).
+                lufs_normalized = False
+                if not args.disable_lufs_normalization:
+                    lufs_normalized = finalize_loudness(
+                        audio_path, args.target_lufs, args.true_peak_db
+                    )
                 track_number = track_index + offset + 1
                 renamed_path = rename_audio_file(audio_path, genre, track_number)
                 final_path = (
@@ -1360,6 +1879,10 @@ def main() -> int:
                         "seed": audio.get("params", {}).get("seed"),
                         "track_number": track_number,
                         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
+                        "true_peak_db": None if args.disable_lufs_normalization else args.true_peak_db,
+                        "tone_profile": None if args.disable_clarity_mastering else args.tone_profile,
+                        "apollo_restored": apollo_restored,
+                        "audiosr_upscaled": audiosr_upscaled,
                         "clarity_mastered": clarity_mastered,
                         "lufs_normalized": lufs_normalized,
                         "fade_out_seconds": None if args.disable_fade_out else args.fade_out_seconds,
@@ -1391,6 +1914,8 @@ def main() -> int:
         "requested_concurrency": initial_concurrency,
         "final_concurrency": concurrency,
         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
+        "apollo_restoration": args.enable_apollo_restoration,
+        "audiosr_upscale": args.enable_audiosr_upscale,
         "clarity_mastering": not args.disable_clarity_mastering,
         "quality": args.quality,
         "model": resolve_model(args),
