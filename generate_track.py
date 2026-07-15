@@ -83,17 +83,20 @@ NATURAL_INSTRUMENT_GUIDANCE = (
     "harsh, thin, overly synthetic, or MIDI-demo sounding instruments."
 )
 MIX_CLARITY_GUIDANCE = (
-    "Use a clean full-range mix with controlled, smooth high frequencies and defined transients. "
-    "Keep hi-hats, rides, crashes, shakers, tambourines, and cymbal tails dark, soft, low in the mix, "
-    "and never piercing, splashy, brittle, fizzy, metallic, sizzling, or dominant. Avoid smeared, "
-    "phasey, watery, low-bitrate, over-compressed, muffled, or harsh high-end artifacts."
+    "Use a clean full-bandwidth mix with natural extended air, open cymbal detail, and defined "
+    "transients. Do not brickwall, lowpass, band-limit, dull, or roll off the high-frequency "
+    "content; keep real musical energy and texture above 15 kHz when the instruments naturally "
+    "produce it. Hi-hats, rides, crashes, shakers, tambourines, and cymbal tails should sound "
+    "crisp, detailed, and realistic without becoming piercing, brittle, fizzy, metallic, or "
+    "dominant. Avoid smeared, phasey, watery, low-bitrate, over-compressed, muffled, or harsh "
+    "high-end artifacts."
 )
 MELODY_REGISTER_GUIDANCE = (
     "Keep melodies, hooks, leads, solos, arpeggios, and ornamental phrases in a warm mid-range "
     "or low-mid register. Do not put melodic content in piercing high registers. Avoid shrill "
     "top-line synths, whistling leads, glassy high piano, squeaky strings, thin flutes, or "
-    "repetitive high-frequency motifs. High frequencies should only add subtle room ambience and "
-    "gentle air, not carry the main melody or percussion energy."
+    "repetitive high-frequency motifs. High frequencies should provide natural instrument air, "
+    "drum detail, and room tone, not carry the main melody."
 )
 SECTION_BLUEPRINT = [
     ("Intro", 0.12, "sparse setup, establish the core groove without full drums"),
@@ -796,7 +799,7 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
 
 
 def apply_clarity_mastering(path: str) -> bool:
-    """Apply conservative EQ/limiting to reduce fog without adding fake ultrasonic air."""
+    """Apply conservative EQ/limiting to reduce fog without hard-cutting high frequencies."""
     if not path:
         return False
     source_path = Path(path)
@@ -816,7 +819,6 @@ def apply_clarity_mastering(path: str) -> bool:
             "equalizer=f=3200:t=q:w=1.1:g=1.0",
             "equalizer=f=5200:t=q:w=1.0:g=0.6",
             "equalizer=f=9800:t=q:w=0.9:g=-1.1",
-            "lowpass=f=16500",
             "alimiter=limit=0.96",
         ]
     )

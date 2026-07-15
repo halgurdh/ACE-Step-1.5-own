@@ -23,7 +23,8 @@
   ],
   "requested_concurrency": 1,
   "final_concurrency": 1,
-  "target_lufs": -16.0,
+  "target_lufs": null,
+  "clarity_mastering": false,
   "quality": "best",
   "model": "acestep-v15-sft",
   "steps": 50,
@@ -31,54 +32,55 @@
   "offload": true,
   "files": [
     {
-      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\jazz-brushed-quartet-session.mp3",
-      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\a5c86142-0661-1490-c3d0-ee0e1fe485ad.wav",
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\jazz-smoke-late-suite.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\1250b63c-322e-bb0b-1254-a63681a450b8.wav",
       "wav_master_path": null,
       "genre": "jazz",
-      "target_duration": 143.8,
-      "key": "F minor",
+      "target_duration": 146.1,
+      "key": "D minor",
       "section_plan": [
         {
           "name": "Intro",
           "start": "0:00",
-          "end": "0:17",
+          "end": "0:18",
           "description": "sparse setup, establish the core groove without full drums"
         },
         {
           "name": "Chorus",
-          "start": "0:17",
-          "end": "0:46",
+          "start": "0:18",
+          "end": "0:47",
           "description": "main hook, fuller drums, strongest motif, higher energy"
         },
         {
           "name": "Verse",
-          "start": "0:46",
-          "end": "1:13",
+          "start": "0:47",
+          "end": "1:15",
           "description": "reduced arrangement, new melodic movement, groove stays steady"
         },
         {
           "name": "Chorus",
-          "start": "1:13",
-          "end": "1:42",
+          "start": "1:15",
+          "end": "1:44",
           "description": "return of the hook with extra layers, fills, and wider energy"
         },
         {
           "name": "Verse",
-          "start": "1:42",
-          "end": "2:09",
+          "start": "1:44",
+          "end": "2:11",
           "description": "second variation, different instrument focus, controlled tension"
         },
         {
           "name": "Outro",
-          "start": "2:09",
-          "end": "2:24",
+          "start": "2:11",
+          "end": "2:26",
           "description": "strip down the groove and resolve cleanly"
         }
       ],
-      "seed": 312315629,
+      "seed": 2048358388,
       "track_number": 1,
-      "target_lufs": -16.0,
-      "lufs_normalized": true
+      "target_lufs": null,
+      "clarity_mastered": false,
+      "lufs_normalized": false
     }
   ]
 }
