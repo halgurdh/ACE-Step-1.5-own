@@ -1,0 +1,86 @@
+{
+  "requested_tracks_per_genre": 1,
+  "saved_tracks": 1,
+  "genres": [
+    "jazz"
+  ],
+  "base_duration": 150.0,
+  "duration_variance_seconds": 10.0,
+  "vram_retry_duration_step_seconds": 15.0,
+  "allowed_keys": [
+    "A minor",
+    "A# minor",
+    "B minor",
+    "C minor",
+    "C# minor",
+    "D minor",
+    "D# minor",
+    "E minor",
+    "F minor",
+    "F# minor",
+    "G minor",
+    "G# minor"
+  ],
+  "requested_concurrency": 1,
+  "final_concurrency": 1,
+  "target_lufs": -16.0,
+  "clarity_mastering": true,
+  "quality": "best",
+  "model": "acestep-v15-sft",
+  "steps": 50,
+  "guidance_scale": 7.0,
+  "offload": true,
+  "files": [
+    {
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\jazz-brushed-quartet-take.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\65bb8d90-1561-77a7-8971-77c3dd5bbba7.wav",
+      "wav_master_path": null,
+      "genre": "jazz",
+      "target_duration": 150.1,
+      "key": "F# minor",
+      "section_plan": [
+        {
+          "name": "Intro",
+          "start": "0:00",
+          "end": "0:18",
+          "description": "sparse setup, establish the core groove without full drums"
+        },
+        {
+          "name": "Chorus",
+          "start": "0:18",
+          "end": "0:48",
+          "description": "main hook, fuller drums, strongest motif, higher energy"
+        },
+        {
+          "name": "Verse",
+          "start": "0:48",
+          "end": "1:17",
+          "description": "reduced arrangement, new melodic movement, groove stays steady"
+        },
+        {
+          "name": "Chorus",
+          "start": "1:17",
+          "end": "1:47",
+          "description": "return of the hook with extra layers, fills, and wider energy"
+        },
+        {
+          "name": "Verse",
+          "start": "1:47",
+          "end": "2:15",
+          "description": "second variation, different instrument focus, controlled tension"
+        },
+        {
+          "name": "Outro",
+          "start": "2:15",
+          "end": "2:30",
+          "description": "strip down the groove and resolve cleanly"
+        }
+      ],
+      "seed": 123291537,
+      "track_number": 1,
+      "target_lufs": -16.0,
+      "clarity_mastered": true,
+      "lufs_normalized": true
+    }
+  ]
+}

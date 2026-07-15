@@ -34,10 +34,25 @@ DEFAULT_LOUDNESS_RANGE = 11.0
 DEFAULT_STRUCTURE = "intro, chorus, verse, chorus, verse, outro"
 DEFAULT_TIME_SIGNATURE = "4"
 QUALITY_PRESETS = {
+    "best": {
+        "model": "acestep-v15-sft",
+        "steps": 50,
+        "guidance_scale": 7.0,
+    },
+    "ultra": {
+        "model": "acestep-v15-base",
+        "steps": 100,
+        "guidance_scale": 7.0,
+    },
     "high": {
         "model": "acestep-v15-base",
         "steps": 64,
-        "guidance_scale": 7.5,
+        "guidance_scale": 7.0,
+    },
+    "balanced": {
+        "model": "acestep-v15-base",
+        "steps": 32,
+        "guidance_scale": 7.0,
     },
     "fast": {
         "model": "acestep-v15-turbo",
@@ -67,6 +82,19 @@ NATURAL_INSTRUMENT_GUIDANCE = (
     "Keep the groove locked and musical without sounding robotic. Avoid plastic, toy-like, "
     "harsh, thin, overly synthetic, or MIDI-demo sounding instruments."
 )
+MIX_CLARITY_GUIDANCE = (
+    "Use a clean full-range mix with controlled, smooth high frequencies and defined transients. "
+    "Keep hi-hats, rides, crashes, shakers, tambourines, and cymbal tails dark, soft, low in the mix, "
+    "and never piercing, splashy, brittle, fizzy, metallic, sizzling, or dominant. Avoid smeared, "
+    "phasey, watery, low-bitrate, over-compressed, muffled, or harsh high-end artifacts."
+)
+MELODY_REGISTER_GUIDANCE = (
+    "Keep melodies, hooks, leads, solos, arpeggios, and ornamental phrases in a warm mid-range "
+    "or low-mid register. Do not put melodic content in piercing high registers. Avoid shrill "
+    "top-line synths, whistling leads, glassy high piano, squeaky strings, thin flutes, or "
+    "repetitive high-frequency motifs. High frequencies should only add subtle room ambience and "
+    "gentle air, not carry the main melody or percussion energy."
+)
 SECTION_BLUEPRINT = [
     ("Intro", 0.12, "sparse setup, establish the core groove without full drums"),
     ("Chorus", 0.20, "main hook, fuller drums, strongest motif, higher energy"),
@@ -77,8 +105,10 @@ SECTION_BLUEPRINT = [
 ]
 TITLE_WORDS = {
     "afropop": ["sunrise", "lagos", "golden", "palm", "market", "joy", "highlife"],
+    "arabic": ["oud", "desert", "moon", "maqam", "cairo", "silk", "dawn"],
     "chill": ["midnight", "soft", "drift", "haze", "quiet", "cloud", "afterglow"],
     "deep house": ["basement", "velvet", "night", "pulse", "subway", "afterhours", "shadow"],
+    "drum & bass": ["break", "sub", "rush", "jungle", "night", "pressure", "motion"],
     "electronic": ["neon", "signal", "circuit", "chrome", "future", "voltage", "motion"],
     "funk": ["pocket", "strut", "groove", "brass", "snap", "velvet", "downtown"],
     "hip hop": ["block", "cipher", "dust", "808", "corner", "sample", "midnight"],
@@ -119,8 +149,10 @@ DEFAULT_INSTRUMENTAL_LYRICS = "\n".join(
 )
 GENRES = [
     "afropop",
+    "arabic",
     "chill",
     "deep house",
+    "drum & bass",
     "electronic",
     "funk",
     "hip hop",
@@ -137,58 +169,82 @@ GENRE_PROFILES = {
     "afropop": {
         "caption": "afropop with bright guitar riffs, syncopated percussion, warm bass, call-and-response hooks, and an upbeat dance groove",
         "bpm": 105,
+        "bpm_range": (96, 116),
+    },
+    "arabic": {
+        "caption": "Arabic fusion with expressive oud melodies, qanun accents, frame drums, darbuka rhythms, warm strings, modal maqam harmony, and a cinematic desert-night atmosphere",
+        "bpm": 96,
+        "bpm_range": (78, 112),
     },
     "chill": {
         "caption": "chill downtempo track with soft keys, mellow pads, relaxed drums, warm bass, and a calm late-night atmosphere",
         "bpm": 82,
+        "bpm_range": (72, 92),
     },
     "deep house": {
         "caption": "deep house with a steady four-on-the-floor groove, warm sub bass, muted chords, spacious pads, and hypnotic club energy",
         "bpm": 124,
+        "bpm_range": (118, 126),
+    },
+    "drum & bass": {
+        "caption": "drum and bass with fast chopped breakbeats, deep rolling sub bass, tight percussion edits, atmospheric pads, and energetic club momentum",
+        "bpm": 174,
+        "bpm_range": (160, 178),
     },
     "electronic": {
         "caption": "electronic track with polished synth leads, layered arpeggios, punchy drums, evolving textures, and a modern festival-ready build",
         "bpm": 128,
+        "bpm_range": (118, 132),
     },
     "funk": {
         "caption": "funk track with tight slap bass, crisp rhythm guitar, live drums, brass stabs, clavinet accents, and an infectious pocket groove",
         "bpm": 108,
+        "bpm_range": (92, 116),
     },
     "hip hop": {
         "caption": "hip hop beat with hard drums, deep 808 bass, chopped melodic samples, sparse keys, and a confident head-nod groove",
         "bpm": 92,
+        "bpm_range": (78, 98),
     },
     "house": {
         "caption": "house track with a driving four-on-the-floor kick, groovy bassline, piano stabs, vocal chops, and uplifting dancefloor energy",
         "bpm": 126,
+        "bpm_range": (120, 128),
     },
     "indian": {
         "caption": "Indian fusion track with tabla rhythms, sitar and flute melodies, cinematic strings, deep bass, and a modern polished arrangement",
         "bpm": 100,
+        "bpm_range": (84, 112),
     },
     "jazz": {
         "caption": "jazz track with brushed drums, walking upright bass, warm piano chords, saxophone melodies, and a smooth improvisational feel",
         "bpm": 116,
+        "bpm_range": (88, 128),
     },
     "pop": {
         "caption": "pop song with catchy melodic hooks, bright drums, polished synths, warm bass, and a radio-ready chorus-focused structure",
         "bpm": 112,
+        "bpm_range": (96, 124),
     },
     "r&b": {
         "caption": "r&b track with silky electric piano chords, smooth bass, crisp drums, lush harmonies, and a slow emotional groove",
         "bpm": 78,
+        "bpm_range": (68, 92),
     },
     "reggae": {
         "caption": "reggae track with offbeat guitar skanks, deep rounded bass, relaxed drums, organ bubbles, and a warm island groove",
         "bpm": 76,
+        "bpm_range": (68, 88),
     },
     "soul": {
         "caption": "soul track with warm vintage keys, expressive guitar, live drums, rich bass, brass accents, and heartfelt groove-driven energy",
         "bpm": 94,
+        "bpm_range": (76, 104),
     },
     "spanish": {
         "caption": "Spanish pop track with nylon guitar, hand percussion, warm bass, romantic melodic phrases, and a polished Latin groove",
         "bpm": 104,
+        "bpm_range": (88, 120),
     },
 }
 
@@ -255,6 +311,11 @@ def parse_args() -> argparse.Namespace:
         help="Skip the post-export ffmpeg loudnorm pass.",
     )
     parser.add_argument(
+        "--disable-clarity-mastering",
+        action="store_true",
+        help="Skip the post-export EQ/limiter pass that reduces foggy AI highs.",
+    )
+    parser.add_argument(
         "--disable-vram-duration-retry",
         action="store_true",
         help="Fail immediately on VRAM errors instead of retrying shorter durations.",
@@ -262,9 +323,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=None, help="Deprecated alias for --amount.")
     parser.add_argument(
         "--quality",
-        default="high",
-        choices=["high", "fast"],
-        help="Quality preset. high uses base model; fast uses turbo.",
+        default="balanced",
+        choices=["best", "ultra", "high", "balanced", "fast"],
+        help=(
+            "Quality preset. best uses SFT; ultra/high use base+ADG; "
+            "balanced uses base faster; fast uses turbo."
+        ),
     )
     parser.add_argument(
         "--steps",
@@ -277,6 +341,11 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override CFG guidance. Only base model uses this.",
+    )
+    parser.add_argument(
+        "--no-adg",
+        action="store_true",
+        help="Disable Adaptive Dual Guidance for non-turbo quality runs.",
     )
     parser.add_argument(
         "--sample-temperature",
@@ -303,11 +372,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override DiT checkpoint folder name. Defaults come from --quality.",
     )
-    parser.add_argument("--lm-model", default="acestep-5Hz-lm-0.6B", help="5Hz LM checkpoint folder name.")
+    parser.add_argument("--lm-model", default="acestep-5Hz-lm-1.7B", help="5Hz LM checkpoint folder name.")
     parser.add_argument(
         "--lm-backend",
-        default=os.environ.get("ACESTEP_LM_BACKEND"),
-        help='LM backend: "vllm", "pt", or "mlx". Defaults to GPU recommendation.',
+        default=os.environ.get("ACESTEP_LM_BACKEND", "pt"),
+        help='LM backend: "vllm", "pt", or "mlx". Defaults to PyTorch for stable 1.7B CPU offload.',
     )
     parser.add_argument(
         "--offload",
@@ -315,9 +384,19 @@ def parse_args() -> argparse.Namespace:
         help="Force CPU offload. High quality enables offload automatically.",
     )
     parser.add_argument(
+        "--offload-dit",
+        action="store_true",
+        help="Also offload the DiT model to CPU between phases to save more VRAM.",
+    )
+    parser.add_argument(
         "--no-offload",
         action="store_true",
         help="Disable automatic high-quality CPU offload.",
+    )
+    parser.add_argument(
+        "--no-offload-dit",
+        action="store_true",
+        help="Disable automatic DiT CPU offload.",
     )
     args = parser.parse_args()
     amount = args.batch_size if args.batch_size is not None else args.amount
@@ -365,11 +444,35 @@ def resolve_guidance_scale(args: argparse.Namespace) -> float:
     return float(QUALITY_PRESETS[args.quality]["guidance_scale"])
 
 
+def resolve_dcw_enabled(args: argparse.Namespace) -> bool:
+    """Return the Gradio-default DCW setting for the selected DiT model."""
+    return "turbo" in resolve_model(args).lower()
+
+
+def resolve_use_adg(args: argparse.Namespace) -> bool:
+    """Return whether Adaptive Dual Guidance should be used for quality output."""
+    if args.no_adg:
+        return False
+    return args.quality in ("best", "ultra", "high") and "turbo" not in resolve_model(args).lower()
+
+
 def resolve_offload(args: argparse.Namespace) -> bool:
     """Return whether model offload should be used for this run."""
     if args.no_offload:
         return False
-    return bool(args.offload or args.quality == "high")
+    return bool(args.offload or args.quality in ("best", "ultra", "high", "balanced"))
+
+
+def resolve_offload_dit(args: argparse.Namespace) -> bool:
+    """Return whether DiT should be offloaded to CPU between generation phases."""
+    if args.no_offload or args.no_offload_dit:
+        return False
+    if args.offload_dit:
+        return True
+    if args.quality in ("best", "ultra", "high", "balanced"):
+        return True
+    gpu_config = get_global_gpu_config()
+    return bool(resolve_offload(args) and getattr(gpu_config, "offload_dit_to_cpu_default", False))
 
 
 def initialize_dit(args: argparse.Namespace) -> AceStepHandler:
@@ -380,6 +483,7 @@ def initialize_dit(args: argparse.Namespace) -> AceStepHandler:
         config_path=resolve_model(args),
         device=args.device,
         offload_to_cpu=resolve_offload(args),
+        offload_dit_to_cpu=resolve_offload_dit(args),
     )
     if not success:
         raise RuntimeError(f"DiT initialization failed: {status}")
@@ -449,6 +553,8 @@ def create_genre_prompt(
         f"{NATURAL_INSTRUMENT_GUIDANCE} "
         f"Keep the rhythm locked to {profile['bpm']} BPM in 4/4. Drums must be on-beat, "
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
+        f"{MIX_CLARITY_GUIDANCE} "
+        f"{MELODY_REGISTER_GUIDANCE} "
         f"Avoid simple looping by changing drums, bass, harmony, melody, fills, and energy "
         f"between sections while staying coherent."
         f"{extra_detail}"
@@ -489,9 +595,23 @@ def resolve_track_duration(args: argparse.Namespace) -> float:
 
 def resolve_minor_key(args: argparse.Namespace, genre: str, track_index: int, seed_offset: int) -> str:
     """Return an exact minor key for one track."""
+    _ = genre, track_index, seed_offset
     if args.key:
         return args.key
-    return MINOR_KEYS[(seed_offset + track_index + len(genre)) % len(MINOR_KEYS)]
+    return random.choice(MINOR_KEYS)
+
+
+def resolve_genre_bpm(args: argparse.Namespace, genre: str, sample: dict[str, object]) -> int:
+    """Return user, smart, or random genre-safe BPM for one track."""
+    if args.bpm is not None:
+        return args.bpm
+    if args.allow_smart_metadata:
+        smart_bpm = coerce_optional_int(sample.get("bpm"))
+        if smart_bpm is not None:
+            return smart_bpm
+    profile = GENRE_PROFILES[genre]
+    low, high = profile.get("bpm_range", (profile["bpm"], profile["bpm"]))
+    return random.randint(int(low), int(high))
 
 
 def format_seconds(seconds: float) -> str:
@@ -528,16 +648,9 @@ def build_section_plan_text(duration: float) -> str:
 
 
 def build_instrumental_lyrics(duration: float) -> str:
-    """Return instrumental section tags with timing and arrangement descriptions."""
-    lines = []
-    for section in build_section_plan(duration):
-        lines.append(
-            f"[{section['name']} - {section['start']} to {section['end']} - "
-            f"{section['description']}]"
-        )
-        lines.append("[Instrumental]")
-        lines.append("")
-    return "\n".join(lines).strip()
+    """Return simple instrumental section tags for the model lyrics field."""
+    _ = duration
+    return DEFAULT_INSTRUMENTAL_LYRICS
 
 
 def build_generation_params(
@@ -559,9 +672,7 @@ def build_generation_params(
             args.duration,
             MIN_DURATION_SECONDS,
         )
-    smart_bpm = coerce_optional_int(sample.get("bpm")) if args.allow_smart_metadata else None
-    bpm = args.bpm if args.bpm is not None else smart_bpm
-    locked_bpm = bpm if bpm is not None else profile["bpm"]
+    locked_bpm = resolve_genre_bpm(args, genre, sample)
     time_signature = (
         str(sample.get("timesignature") or DEFAULT_TIME_SIGNATURE)
         if args.allow_smart_metadata
@@ -575,6 +686,8 @@ def build_generation_params(
         "Use only notes and harmonies that fit this minor key; avoid off-key melodies, "
         "wrong-key bass notes, or accidental major-key modulation. "
         f"{NATURAL_INSTRUMENT_GUIDANCE} "
+        f"{MIX_CLARITY_GUIDANCE} "
+        f"{MELODY_REGISTER_GUIDANCE} "
         f"Drums must be on-beat, groovy, natural, and stylistically correct for {genre}. "
         "Use clear section changes, tasteful fills, realistic transitions, and evolving "
         "arrangement to avoid repetitive looping. Prefer a finished record feel over a loop."
@@ -592,13 +705,17 @@ def build_generation_params(
         duration=duration,
         inference_steps=resolve_steps(args),
         guidance_scale=resolve_guidance_scale(args),
+        use_adg=resolve_use_adg(args),
+        shift=3.0,
+        dcw_enabled=resolve_dcw_enabled(args),
         seed=args.seed,
         thinking=True,
-        lm_temperature=0.7,
-        lm_top_p=0.85,
-        use_cot_metas=False,
+        lm_temperature=0.85,
+        lm_cfg_scale=2.0,
+        lm_top_p=0.9,
+        use_cot_metas=True,
         use_cot_caption=False,
-        use_cot_language=False,
+        use_cot_language=True,
     )
 
 
@@ -620,9 +737,10 @@ def build_generation_config_for_track(
 
     return GenerationConfig(
         batch_size=chunk_size,
+        allow_lm_batch=True,
         use_random_seed=args.seed < 0,
         seeds=seeds,
-        audio_format=args.format,
+        audio_format="wav" if args.format == "mp3" else args.format,
         mp3_bitrate=args.mp3_bitrate,
     )
 
@@ -675,6 +793,111 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
                 temp_path.unlink()
             except OSError:
                 logger.warning("Could not remove temporary LUFS file: {}", temp_path)
+
+
+def apply_clarity_mastering(path: str) -> bool:
+    """Apply conservative EQ/limiting to reduce fog without adding fake ultrasonic air."""
+    if not path:
+        return False
+    source_path = Path(path)
+    if not source_path.exists():
+        logger.warning("Clarity mastering skipped; file not found: {}", source_path)
+        return False
+    if shutil.which("ffmpeg") is None:
+        logger.warning("Clarity mastering skipped; ffmpeg is not available on PATH")
+        return False
+
+    temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
+    clarity_filter = ",".join(
+        [
+            "highpass=f=28",
+            "equalizer=f=240:t=q:w=1.0:g=-1.2",
+            "equalizer=f=420:t=q:w=1.0:g=-0.8",
+            "equalizer=f=3200:t=q:w=1.1:g=1.0",
+            "equalizer=f=5200:t=q:w=1.0:g=0.6",
+            "equalizer=f=9800:t=q:w=0.9:g=-1.1",
+            "lowpass=f=16500",
+            "alimiter=limit=0.96",
+        ]
+    )
+    command = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source_path),
+        "-af",
+        clarity_filter,
+        str(temp_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, timeout=180)
+        temp_path.replace(source_path)
+        logger.info("Applied clarity mastering: {}", source_path)
+        return True
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
+        logger.warning("Clarity mastering failed for {}: {}", source_path, stderr)
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning("Clarity mastering timed out for {}", source_path)
+        return False
+    finally:
+        if temp_path.exists():
+            try:
+                temp_path.unlink()
+            except OSError:
+                logger.warning("Could not remove temporary clarity file: {}", temp_path)
+
+
+def convert_wav_to_mp3(wav_path: str, bitrate: str, keep_wav: bool = False) -> str:
+    """Convert a WAV master to MP3 using ffmpeg and return the MP3 path."""
+    source_path = Path(wav_path)
+    if source_path.suffix.lower() != ".wav":
+        return wav_path
+    if not source_path.exists():
+        logger.warning("MP3 conversion skipped; WAV file not found: {}", source_path)
+        return wav_path
+    if shutil.which("ffmpeg") is None:
+        logger.warning("MP3 conversion skipped; ffmpeg is not available on PATH")
+        return wav_path
+
+    mp3_path = source_path.with_suffix(".mp3")
+    command = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source_path),
+        "-codec:a",
+        "libmp3lame",
+        "-b:a",
+        bitrate,
+        "-ar",
+        "48000",
+        str(mp3_path),
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, timeout=180)
+        logger.info("Encoded MP3 from WAV master: {}", mp3_path)
+        if not keep_wav:
+            try:
+                source_path.unlink()
+                logger.info("Removed temporary WAV after MP3 export: {}", source_path)
+            except OSError as exc:
+                logger.warning("Could not remove temporary WAV {}: {}", source_path, exc)
+        return str(mp3_path)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
+        logger.warning("MP3 conversion failed for {}: {}", source_path, stderr)
+        return wav_path
+    except subprocess.TimeoutExpired:
+        logger.warning("MP3 conversion timed out for {}", source_path)
+        return wav_path
 
 
 def slugify_title(value: str) -> str:
@@ -801,12 +1024,13 @@ def main() -> int:
     logger.info("Requested tracks per genre: {}", amount)
     logger.info("Tracks per generation call: {}", concurrency)
     logger.info(
-        "Quality: {} model={} steps={} guidance={} offload={}",
+        "Quality: {} model={} steps={} guidance={} offload={} offload_dit={}",
         args.quality,
         resolve_model(args),
         resolve_steps(args),
         resolve_guidance_scale(args),
         resolve_offload(args),
+        resolve_offload_dit(args),
     )
 
     dit_handler = initialize_dit(args)
@@ -850,16 +1074,25 @@ def main() -> int:
             saved_count = len(result.audios)
             for offset, audio in enumerate(result.audios):
                 audio_path = audio.get("path", "")
+                clarity_mastered = False
+                if not args.disable_clarity_mastering:
+                    clarity_mastered = apply_clarity_mastering(audio_path)
                 lufs_normalized = False
                 if not args.disable_lufs_normalization:
                     lufs_normalized = normalize_file_to_lufs(audio_path, args.target_lufs)
                 track_number = track_index + offset + 1
                 renamed_path = rename_audio_file(audio_path, genre, track_number)
-                audio["path"] = renamed_path
+                final_path = (
+                    convert_wav_to_mp3(renamed_path, args.mp3_bitrate)
+                    if args.format == "mp3"
+                    else renamed_path
+                )
+                audio["path"] = final_path
                 file_entries.append(
                     {
-                        "path": renamed_path,
+                        "path": final_path,
                         "original_path": audio_path,
+                        "wav_master_path": None,
                         "genre": genre,
                         "target_duration": used_duration,
                         "key": keyscale,
@@ -867,6 +1100,7 @@ def main() -> int:
                         "seed": audio.get("params", {}).get("seed"),
                         "track_number": track_number,
                         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
+                        "clarity_mastered": clarity_mastered,
                         "lufs_normalized": lufs_normalized,
                     }
                 )
@@ -895,6 +1129,7 @@ def main() -> int:
         "requested_concurrency": initial_concurrency,
         "final_concurrency": concurrency,
         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
+        "clarity_mastering": not args.disable_clarity_mastering,
         "quality": args.quality,
         "model": resolve_model(args),
         "steps": resolve_steps(args),
