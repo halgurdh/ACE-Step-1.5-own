@@ -116,6 +116,10 @@ uv run acestep
 
 # Or launch REST API server
 uv run acestep-api
+
+# GENERATE MORE...
+uv run python generate_track.py --all-genres --amount 20 --duration 150 --concurrency 1 --format mp3
+
 ```
 
 Open http://localhost:7860 (Gradio) or http://localhost:8001 (API).
