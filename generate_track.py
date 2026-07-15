@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,7 @@ VRAM_RETRY_DURATION_STEP_SECONDS = 15.0
 DEFAULT_TARGET_LUFS = -16.0
 DEFAULT_TRUE_PEAK_DB = -1.5
 DEFAULT_LOUDNESS_RANGE = 11.0
+_INTERMEDIATE_CODEC_ARGS = ["-c:a", "pcm_s24le", "-ar", "48000"]
 DEFAULT_STRUCTURE = "intro, chorus, verse, chorus, verse, outro"
 DEFAULT_TIME_SIGNATURE = "4"
 QUALITY_PRESETS = {
@@ -137,17 +139,11 @@ TITLE_SUFFIXES = [
 DEFAULT_INSTRUMENTAL_LYRICS = "\n".join(
     [
         "[Intro]",
-        "[Instrumental]",
         "[Chorus]",
-        "[Instrumental]",
         "[Verse]",
-        "[Instrumental]",
         "[Chorus]",
-        "[Instrumental]",
         "[Verse]",
-        "[Instrumental]",
         "[Outro]",
-        "[Instrumental]",
     ]
 )
 GENRES = [
@@ -748,8 +744,53 @@ def build_generation_config_for_track(
     )
 
 
+def _run_ffmpeg(args: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
+    """Run ffmpeg with common non-interactive options."""
+    command = ["ffmpeg", "-y", "-hide_banner", "-nostats", *args]
+    return subprocess.run(command, check=True, capture_output=True, timeout=timeout)
+
+
+def measure_loudness(path: Path, target_lufs: float) -> dict | None:
+    """Measure integrated loudness, true peak, LRA, and threshold for loudnorm."""
+    loudnorm = (
+        f"loudnorm=I={target_lufs}:TP={DEFAULT_TRUE_PEAK_DB}:"
+        f"LRA={DEFAULT_LOUDNESS_RANGE}:print_format=json"
+    )
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-i",
+                str(path),
+                "-af",
+                loudnorm,
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Loudness measurement timed out for {}", path)
+        return None
+
+    stderr = proc.stderr.decode("utf-8", errors="ignore")
+    match = re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", stderr, re.DOTALL)
+    if not match:
+        logger.warning("Could not parse loudnorm measurement for {}", path)
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        logger.warning("Invalid loudnorm JSON for {}", path)
+        return None
+
+
 def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
-    """Normalize one exported file in-place to an approximate LUFS target."""
+    """Two-pass linear loudness normalization using static gain."""
     if not path:
         return False
     source_path = Path(path)
@@ -760,28 +801,34 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
         logger.warning("LUFS normalization skipped; ffmpeg is not available on PATH")
         return False
 
-    temp_path = source_path.with_name(f"{source_path.stem}.lufs_tmp{source_path.suffix}")
+    measured = measure_loudness(source_path, target_lufs)
+    if measured is None:
+        return False
+
     loudnorm = (
-        f"loudnorm=I={target_lufs}:"
-        f"TP={DEFAULT_TRUE_PEAK_DB}:"
-        f"LRA={DEFAULT_LOUDNESS_RANGE}"
+        f"loudnorm=I={target_lufs}:TP={DEFAULT_TRUE_PEAK_DB}:"
+        f"LRA={DEFAULT_LOUDNESS_RANGE}:"
+        f"measured_I={measured['input_i']}:"
+        f"measured_TP={measured['input_tp']}:"
+        f"measured_LRA={measured['input_lra']}:"
+        f"measured_thresh={measured['input_thresh']}:"
+        f"offset={measured.get('target_offset', 0)}:"
+        f"linear=true"
     )
-    command = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(source_path),
-        "-af",
-        loudnorm,
-        str(temp_path),
-    ]
+    temp_path = source_path.with_name(f"{source_path.stem}.lufs_tmp{source_path.suffix}")
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=180)
+        _run_ffmpeg(
+            [
+                "-i",
+                str(source_path),
+                "-af",
+                loudnorm,
+                *_INTERMEDIATE_CODEC_ARGS,
+                str(temp_path),
+            ]
+        )
         temp_path.replace(source_path)
-        logger.info("Normalized to about {} LUFS: {}", target_lufs, source_path)
+        logger.info("Linear-normalized to {} LUFS: {}", target_lufs, source_path)
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
@@ -799,7 +846,7 @@ def normalize_file_to_lufs(path: str, target_lufs: float) -> bool:
 
 
 def apply_clarity_mastering(path: str) -> bool:
-    """Apply conservative EQ/limiting to reduce fog without hard-cutting high frequencies."""
+    """Apply an EQ clarity pass with a safety limiter to prevent boost-induced clipping."""
     if not path:
         return False
     source_path = Path(path)
@@ -810,34 +857,30 @@ def apply_clarity_mastering(path: str) -> bool:
         logger.warning("Clarity mastering skipped; ffmpeg is not available on PATH")
         return False
 
-    temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
     clarity_filter = ",".join(
         [
             "highpass=f=28",
-            "equalizer=f=240:t=q:w=1.0:g=-1.2",
-            "equalizer=f=420:t=q:w=1.0:g=-0.8",
-            "equalizer=f=3200:t=q:w=1.1:g=1.0",
-            "equalizer=f=5200:t=q:w=1.0:g=0.6",
-            "equalizer=f=9800:t=q:w=0.9:g=-1.1",
-            "alimiter=limit=0.96",
+            "equalizer=f=240:t=q:w=1.8:g=-2.5",
+            "equalizer=f=3200:t=q:w=0.8:g=1.5",
+            "equalizer=f=5500:t=q:w=0.8:g=2.0",
+            "highshelf=f=8500:g=-2.5",
+            "alimiter=limit=0.97:attack=5:release=50",
         ]
     )
-    command = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        str(source_path),
-        "-af",
-        clarity_filter,
-        str(temp_path),
-    ]
+    temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
     try:
-        subprocess.run(command, check=True, capture_output=True, timeout=180)
+        _run_ffmpeg(
+            [
+                "-i",
+                str(source_path),
+                "-af",
+                clarity_filter,
+                *_INTERMEDIATE_CODEC_ARGS,
+                str(temp_path),
+            ]
+        )
         temp_path.replace(source_path)
-        logger.info("Applied clarity mastering: {}", source_path)
+        logger.info("Applied clarity mastering (EQ + limiter): {}", source_path)
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)

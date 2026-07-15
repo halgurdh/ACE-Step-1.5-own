@@ -23,8 +23,8 @@
   ],
   "requested_concurrency": 1,
   "final_concurrency": 1,
-  "target_lufs": null,
-  "clarity_mastering": false,
+  "target_lufs": -14.0,
+  "clarity_mastering": true,
   "quality": "best",
   "model": "acestep-v15-sft",
   "steps": 50,
@@ -32,12 +32,12 @@
   "offload": true,
   "files": [
     {
-      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\jazz-smoke-late-suite.mp3",
-      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\1250b63c-322e-bb0b-1254-a63681a450b8.wav",
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\jazz-uptown-smoke-suite.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\5d12bb11-4788-552b-7991-962e54bc85f2.wav",
       "wav_master_path": null,
       "genre": "jazz",
       "target_duration": 146.1,
-      "key": "D minor",
+      "key": "A# minor",
       "section_plan": [
         {
           "name": "Intro",
@@ -76,11 +76,11 @@
           "description": "strip down the groove and resolve cleanly"
         }
       ],
-      "seed": 2048358388,
+      "seed": 1133157528,
       "track_number": 1,
-      "target_lufs": null,
-      "clarity_mastered": false,
-      "lufs_normalized": false
+      "target_lufs": -14.0,
+      "clarity_mastered": true,
+      "lufs_normalized": true
     }
   ]
 }

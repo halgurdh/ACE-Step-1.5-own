@@ -120,9 +120,10 @@ uv run acestep-api
 # GENERATE MORE...
 uv run python generate_track.py --all-genres --amount 20 --duration 150 --concurrency 1 --format mp3
 
-uv run python generate_track.py --genre jazz --quality high --steps 80 --amount 1 --duration 150 --concurrency 1 --format mp3
+uv run python generate_track.py --genre jazz --quality best --amount 1 --duration 150 --concurrency 1 --format mp3 --target-lufs -14
 
-uv run python generate_track.py --genre jazz --quality best --amount 1 --duration 150 --concurrency 1 --format mp3
+uv run python generate_track.py --quality best --all-genres --amount 20  --duration 150 --concurrency 1 --format mp3 --target-lufs -14
+
 
 ```
 
