@@ -41,6 +41,11 @@ DEFAULT_TRUE_PEAK_DB = -1.0  # streaming-safe true-peak ceiling (headroom for lo
 DEFAULT_LOUDNESS_RANGE = 11.0
 DEFAULT_FADE_OUT_SECONDS = 2.0
 DEFAULT_TONE_PROFILE = "reference"
+DEFAULT_STEREO_WIDTH = 0.7  # ffmpeg stereotools slev: 1.0 = unchanged, <1.0 narrows the
+# side (difference) signal, >1.0 widens. Generated tracks have come out diffuse/unfocused
+# ("all over the place") -- genre-profile captions and WARM_MIX_GUIDANCE both explicitly ask
+# for "wide stereo image", which the model leans into more than intended. This is a direct,
+# measurable narrowing rather than another soft caption request.
 # When the gain needed to hit the LUFS target would push true peak past the ceiling
 # minus this margin, the final stage switches from pure gain to gain + oversampled limiting.
 LOUDNESS_LIMITER_MARGIN_DB = 0.2
@@ -734,6 +739,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--stereo-width",
+        type=float,
+        default=DEFAULT_STEREO_WIDTH,
+        help=(
+            "Stereo side-channel level applied during tone mastering (ffmpeg stereotools "
+            "slev). 1.0 = unchanged, below 1.0 narrows the stereo image (mono content is "
+            "unaffected), above 1.0 widens. Default 0.7 pulls in a diffuse/unfocused image "
+            "toward a more centered, professional-sounding mix."
+        ),
+    )
+    parser.add_argument(
         "--enable-apollo-restoration",
         action="store_true",
         help=(
@@ -1184,6 +1200,64 @@ def resolve_cover_artist(args: argparse.Namespace, genre: str) -> str | None:
     return random.choice(candidates)
 
 
+CAPTION_TOKEN_BUDGET = 190
+# The DiT text encoder's live tokenization call (acestep/core/generation/handler/
+# conditioning_text.py: self.text_tokenizer(text_prompt, truncation=True, max_length=256))
+# truncates the caption *and the bpm/key/timesignature/duration metadata block that follows
+# it in the same wrapped prompt* together to 256 tokens -- verified directly against that
+# tokenizer: an unbounded version of this session's assembled caption (smart caption + all
+# the guarantee sentences appended unconditionally) measured 326 tokens, and the overflow
+# silently dropped not just the trailing guarantee text but the entire "# Metas" block.
+# Budgeting the caption body to ~190 leaves the ~35-45 tokens the instruction+metas wrapper
+# itself costs, so metadata is never what gets silently cut off the end.
+_CAPTION_TOKENIZER = None
+_CAPTION_TOKENIZER_UNAVAILABLE = False
+
+
+def _caption_tokenizer():
+    """Lazily load the DiT text encoder's own tokenizer for real token-budget checks."""
+    global _CAPTION_TOKENIZER, _CAPTION_TOKENIZER_UNAVAILABLE
+    if _CAPTION_TOKENIZER is not None or _CAPTION_TOKENIZER_UNAVAILABLE:
+        return _CAPTION_TOKENIZER
+    try:
+        from transformers import AutoTokenizer
+
+        _CAPTION_TOKENIZER = AutoTokenizer.from_pretrained(
+            str(CHECKPOINT_DIR / "Qwen3-Embedding-0.6B"), trust_remote_code=True
+        )
+    except Exception as exc:
+        logger.warning("Caption token-budget check unavailable, using char-count fallback: {}", exc)
+        _CAPTION_TOKENIZER_UNAVAILABLE = True
+    return _CAPTION_TOKENIZER
+
+
+def _caption_token_count(text: str) -> int:
+    """Return a real token count for budget checks, or a ~4-chars/token estimate as fallback."""
+    tokenizer = _caption_tokenizer()
+    if tokenizer is not None:
+        return len(tokenizer(text).input_ids)
+    return max(1, len(text) // 4)
+
+
+def assemble_capped_caption(
+    base_caption: str, additions: list[str], budget: int = CAPTION_TOKEN_BUDGET
+) -> str:
+    """Append caption additions in priority order, skipping any that would push the caption
+    past the shared 256-token DiT text-encoder budget (see CAPTION_TOKEN_BUDGET above).
+    Lower-priority additions are dropped whole -- never truncated mid-sentence -- and a
+    shorter lower-priority addition can still slot in after an earlier, larger one didn't fit.
+    """
+    caption = base_caption.rstrip(".")
+    for addition in additions:
+        addition = (addition or "").strip().rstrip(".")
+        if not addition:
+            continue
+        candidate = f"{caption}. {addition}"
+        if _caption_token_count(candidate) <= budget:
+            caption = candidate
+    return caption + "."
+
+
 def cover_style_guidance(artist: str | None) -> str:
     """Return a caption fragment steering generation toward an artist's style."""
     if not artist:
@@ -1265,25 +1339,11 @@ def build_generation_params(
     # natural single-paragraph song descriptions (~80-120 words) during training.
     smart_caption = str(sample.get("caption") or "").strip()
     if smart_caption:
-        caption = smart_caption
+        base_caption = smart_caption
     else:
-        caption = profile["caption"]
+        base_caption = profile["caption"]
         if args.prompt.strip():
-            caption = f"{caption}, {args.prompt.strip()}"
-
-    # Always append the quality hint, not just in the fallback branch above -- the LM's
-    # own caption is asked (in create_genre_prompt's query) to convey skilled/human
-    # performance, but isn't guaranteed to actually say so, same class of gap as the
-    # missing-genre-name issue below. Cheap check avoids stacking near-duplicate phrasing
-    # when the LM's caption already covers it.
-    if "skilled" not in caption.lower() and "professional" not in caption.lower():
-        caption = f"{caption.rstrip('.')}. {CONCISE_QUALITY_HINT}"
-
-    caption = f"{caption.rstrip('.')}. {MIN_LAYER_GUARANTEE}"
-    caption = f"{caption.rstrip('.')}. {FREQUENCY_BALANCE_GUARANTEE}"
-    ingredient_guidance = key_ingredient_guidance(key_ingredients or [])
-    if ingredient_guidance:
-        caption = f"{caption.rstrip('.')}. {ingredient_guidance}"
+            base_caption = f"{base_caption}, {args.prompt.strip()}"
 
     # GenerationParams has no dedicated genre field -- genre is conveyed purely through
     # caption text, and training captions consistently name the genre right at the start
@@ -1291,13 +1351,33 @@ def build_generation_params(
     # The LM's own caption isn't guaranteed to say "afropop" explicitly even when asked
     # to write one, so anchor it explicitly here rather than trusting that alone --
     # without it, ambiguous instrumentation descriptions can drift toward a different
-    # genre's idiom (e.g. brushed/swung drums read as jazz instead of afropop).
-    if genre.lower() not in caption.lower():
-        caption = f"{genre} track: {caption}"
+    # genre's idiom (e.g. brushed/swung drums read as jazz instead of afropop). Done before
+    # the budget-capped assembly below so the prefix is never at risk of being dropped.
+    if genre.lower() not in base_caption.lower():
+        base_caption = f"{genre} track: {base_caption}"
 
-    caption = (
-        f"{caption.rstrip('.')}, fully instrumental with no sung or spoken vocals."
-        f"{cover_style_guidance(cover_artist)}"
+    # Everything below competes for a shared ~256-token DiT text-encoder budget alongside
+    # the bpm/key/timesignature/duration metadata that follows the caption in the same
+    # tokenized prompt (see CAPTION_TOKEN_BUDGET) -- listed in priority order, most
+    # important first, since a lower-priority item gets dropped whole rather than corrupting
+    # everything after it via mid-sentence truncation.
+    quality_hint = (
+        "" if "skilled" in base_caption.lower() or "professional" in base_caption.lower()
+        else CONCISE_QUALITY_HINT
+    )
+    caption = assemble_capped_caption(
+        base_caption,
+        [
+            # Highest priority: corrects the LM's own caption, which isn't guaranteed to
+            # avoid describing vocals/singers even when instrumental=True is requested
+            # (observed in practice: LM captions mentioning "female voice", "vocal chops").
+            "fully instrumental with no sung or spoken vocals",
+            key_ingredient_guidance(key_ingredients or []),
+            MIN_LAYER_GUARANTEE,
+            FREQUENCY_BALANCE_GUARANTEE,
+            quality_hint,
+            cover_style_guidance(cover_artist).strip(" ."),
+        ],
     )
 
     return GenerationParams(
@@ -1552,7 +1632,7 @@ def _dyneq_deharsh(threshold: float, freq: int, q: float, ratio: float, range_db
     return f"{base}:mode=cut:direction=downward"
 
 
-def build_tone_profile_chain(profile: str) -> str:
+def build_tone_profile_chain(profile: str, stereo_width: float = DEFAULT_STEREO_WIDTH) -> str:
     """Tone-shaping chains derived from spectral analysis of the reference master
     (heavenly.mp3): sub-forward low end, mono bass, controlled 300 Hz region, soft
     presence, smooth top rolling off ~14 kHz, width concentrated in the air band.
@@ -1585,6 +1665,8 @@ def build_tone_profile_chain(profile: str) -> str:
             "equalizer=f=300:t=q:w=1.4:g=-1.2",
             _dyneq_deharsh(11, 8500, 0.7, 2, 5),
         ]
+    if stereo_width != 1.0:
+        stages.append(f"stereotools=slev={stereo_width}")
     return ",".join(stages)
 
 
@@ -1592,6 +1674,7 @@ def apply_tone_mastering(
     path: str,
     profile: str = DEFAULT_TONE_PROFILE,
     mono_bass_crossover_hz: int = MONO_BASS_CROSSOVER_HZ,
+    stereo_width: float = DEFAULT_STEREO_WIDTH,
 ) -> bool:
     """Apply the tone-shaping stage (EQ + dynamic de-harsh + mono bass, no limiting)."""
     if not path:
@@ -1606,7 +1689,7 @@ def apply_tone_mastering(
 
     if profile not in TONE_PROFILE_NAMES:
         profile = DEFAULT_TONE_PROFILE
-    inner_chain = build_tone_profile_chain(profile)
+    inner_chain = build_tone_profile_chain(profile, stereo_width)
     filter_complex = _mono_bass_split(inner_chain, mono_bass_crossover_hz)
     temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
     try:
@@ -1624,9 +1707,10 @@ def apply_tone_mastering(
         )
         temp_path.replace(source_path)
         logger.info(
-            "Applied tone mastering ('{}' profile, mono-bass LR4 @ {} Hz): {}",
+            "Applied tone mastering ('{}' profile, mono-bass LR4 @ {} Hz, stereo width {}): {}",
             profile,
             mono_bass_crossover_hz,
+            stereo_width,
             source_path,
         )
         return True
@@ -2206,7 +2290,7 @@ def main() -> int:
                 clarity_mastered = False
                 if not args.disable_clarity_mastering:
                     clarity_mastered = apply_tone_mastering(
-                        audio_path, args.tone_profile, args.mono_bass_crossover_hz
+                        audio_path, args.tone_profile, args.mono_bass_crossover_hz, args.stereo_width
                     )
                 faded_out = False
                 if not args.disable_fade_out:

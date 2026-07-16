@@ -30,58 +30,58 @@
   "candidate_reference": null,
   "candidate_use_aesthetics": false,
   "clarity_mastering": true,
-  "quality": "best",
-  "model": "acestep-v15-xl-sft",
-  "steps": 50,
-  "guidance_scale": 7.0,
-  "offload": true,
+  "quality": "fast",
+  "model": "acestep-v15-turbo",
+  "steps": 8,
+  "guidance_scale": 2.0,
+  "offload": false,
   "files": [
     {
-      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\xl4b_test2\\afropop-joy-golden-suite.mp3",
-      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\xl4b_test2\\43631376-4e67-40b5-1622-f5966726b6e3.wav",
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\budget_test\\afropop-market-highlife-take.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\budget_test\\99180776-b9aa-e783-1fe5-d774a8a39e22.wav",
       "wav_master_path": null,
       "genre": "afropop",
-      "target_duration": 141.8,
-      "key": "G minor",
+      "target_duration": 157.8,
+      "key": "D minor",
       "section_plan": [
         {
           "name": "Intro",
           "start": "0:00",
-          "end": "0:17",
+          "end": "0:19",
           "description": "sparse setup over the same steady pulse, hinting the groove"
         },
         {
           "name": "Chorus",
-          "start": "0:17",
-          "end": "0:45",
+          "start": "0:19",
+          "end": "0:50",
           "description": "main hook, fuller drums, strongest motif; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "0:45",
-          "end": "1:12",
+          "start": "0:50",
+          "end": "1:20",
           "description": "reduced arrangement, new melodic movement; same steady groove"
         },
         {
           "name": "Chorus",
-          "start": "1:12",
-          "end": "1:41",
+          "start": "1:20",
+          "end": "1:52",
           "description": "hook returns with extra layers and fills; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "1:41",
-          "end": "2:08",
+          "start": "1:52",
+          "end": "2:22",
           "description": "second variation, different instrument focus; same steady groove"
         },
         {
           "name": "Outro",
-          "start": "2:08",
-          "end": "2:22",
+          "start": "2:22",
+          "end": "2:38",
           "description": "strip down over the same pulse and resolve cleanly"
         }
       ],
-      "seed": 446855884,
+      "seed": 3235496721,
       "track_number": 1,
       "target_lufs": -14.0,
       "true_peak_db": -1.0,
