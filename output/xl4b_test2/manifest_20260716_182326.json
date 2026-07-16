@@ -30,19 +30,19 @@
   "candidate_reference": null,
   "candidate_use_aesthetics": false,
   "clarity_mastering": true,
-  "quality": "ultra",
-  "model": "acestep-v15-base",
-  "steps": 100,
-  "guidance_scale": 3.5,
+  "quality": "best",
+  "model": "acestep-v15-xl-sft",
+  "steps": 50,
+  "guidance_scale": 7.0,
   "offload": true,
   "files": [
     {
-      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\afropop-golden-lagos-session.mp3",
-      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\py_generate\\50e95c2b-5f54-90da-cd2d-b86aa245b77a.wav",
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\xl4b_test2\\afropop-joy-golden-suite.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\xl4b_test2\\43631376-4e67-40b5-1622-f5966726b6e3.wav",
       "wav_master_path": null,
       "genre": "afropop",
-      "target_duration": 145.0,
-      "key": "F# minor",
+      "target_duration": 141.8,
+      "key": "G minor",
       "section_plan": [
         {
           "name": "Intro",
@@ -53,35 +53,35 @@
         {
           "name": "Chorus",
           "start": "0:17",
-          "end": "0:46",
+          "end": "0:45",
           "description": "main hook, fuller drums, strongest motif; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "0:46",
-          "end": "1:14",
+          "start": "0:45",
+          "end": "1:12",
           "description": "reduced arrangement, new melodic movement; same steady groove"
         },
         {
           "name": "Chorus",
-          "start": "1:14",
-          "end": "1:43",
+          "start": "1:12",
+          "end": "1:41",
           "description": "hook returns with extra layers and fills; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "1:43",
-          "end": "2:10",
+          "start": "1:41",
+          "end": "2:08",
           "description": "second variation, different instrument focus; same steady groove"
         },
         {
           "name": "Outro",
-          "start": "2:10",
-          "end": "2:25",
+          "start": "2:08",
+          "end": "2:22",
           "description": "strip down over the same pulse and resolve cleanly"
         }
       ],
-      "seed": 2971281992,
+      "seed": 446855884,
       "track_number": 1,
       "target_lufs": -14.0,
       "true_peak_db": -1.0,

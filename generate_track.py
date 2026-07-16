@@ -185,6 +185,17 @@ MELODY_REGISTER_GUIDANCE = (
     "repetitive high-frequency motifs. High frequencies should provide natural instrument air, "
     "drum detail, and room tone, not carry the main melody."
 )
+# Positive caption text (MELODY_REGISTER_GUIDANCE above) asks the LM to avoid high-register
+# synths, but caption prose is only ever a soft nudge on the LM's own generated caption --
+# it's not guaranteed to survive, same class of gap as MIN_LAYER_GUARANTEE. lm_negative_prompt
+# is a stronger, more direct lever: the LM handler substitutes this text as the CFG
+# *unconditional* prompt, so lm_cfg_scale actively steers composition away from it rather
+# than just being asked nicely. Kept as a CLI default (not hardcoded) so more exclusions can
+# be added/overridden per run without another code change.
+DEFAULT_NEGATIVE_PROMPT = (
+    "shrill high-pitched synths, piercing high-frequency lead melodies, squeaky thin "
+    "top-line notes, screechy high synth stabs"
+)
 MINIMAL_ARRANGEMENT_GUIDANCE = (
     "Keep the arrangement minimal and spacious like a polished, professional record that "
     "trusts restraint, not a beginner or demo-level arrangement. Use only a few purposeful "
@@ -525,6 +536,56 @@ ARTIST_REFERENCES = {
     "spanish": ["Rosalia", "Bad Bunny", "Shakira", "Manu Chao", "Alejandro Sanz"],
 }
 
+# Signature instruments/production elements per genre, drawn from that genre's own
+# GENRE_PROFILES caption so they never contradict it. Soft mentions in the profile caption
+# (e.g. afropop's "bright interlocking guitar riffs") aren't reliably followed -- generated
+# tracks have come out missing the one instrument that actually makes a genre read as
+# genre-authentic and "professional" rather than generic. resolve_key_ingredients() picks
+# 1-2 per track and key_ingredient_guidance() states them as a hard, unconditional
+# requirement, the same escalation already used for MIN_LAYER_GUARANTEE.
+KEY_INGREDIENTS = {
+    "afropop": ["interlocking electric guitar riffs", "upfront shaker percussion", "bright horn stabs"],
+    "arabic": ["expressive oud lead", "darbuka hand percussion", "legato string swells"],
+    "calm jazzy piano": ["expressive piano lead", "muted trumpet or saxophone coloring", "softly brushed drum kit"],
+    "celtic": ["lyrical fiddle lead", "wooden tin whistle", "celtic harp accents"],
+    "chill": ["soft electric piano", "mellow synth pad", "warm round bass"],
+    "country": ["weeping pedal steel guitar", "fiddle accents", "bright acoustic guitar interplay"],
+    "deep house": ["muted chord stabs", "spacious analog pad", "crisp hi-hat pattern"],
+    "drum & bass": ["atmospheric pad", "sparse melodic stabs", "rolling sub bass"],
+    "electronic": ["polished synth lead", "supporting arpeggio", "deep clean bass"],
+    "funk": ["tight slap bass", "clavinet accents", "punchy horn stabs"],
+    "hip hop": ["chopped melodic sample", "sparse electric keys", "deep 808 bass"],
+    "house": ["warm piano stabs", "groovy bassline", "vocal chop hook"],
+    "indian": ["expressive sitar lead", "tabla percussion", "cinematic string swells"],
+    "jazz": ["walking upright bass", "warm piano comping", "saxophone lead"],
+    "pop": ["polished synth layer", "clean rhythm guitar", "catchy lead hook"],
+    "r&b": ["silky electric piano", "lead guitar or synth line", "smooth deep bass"],
+    "reggae": ["offbeat guitar skank", "organ bubble", "deep rounded bass"],
+    "soul": ["vintage electric piano", "expressive guitar", "brass accents"],
+    "spanish": ["nylon-string lead guitar", "cajon or palmas pattern", "warm bass"],
+}
+
+
+def resolve_key_ingredients(genre: str) -> list[str]:
+    """Return 1-2 randomly chosen signature instruments/elements to force for this track."""
+    candidates = KEY_INGREDIENTS.get(genre, [])
+    if not candidates:
+        return []
+    count = min(len(candidates), random.randint(1, 2))
+    return random.sample(candidates, count)
+
+
+def key_ingredient_guidance(key_ingredients: list[str]) -> str:
+    """Return a hard, unconditional instruction to make specific ingredients audible."""
+    if not key_ingredients:
+        return ""
+    joined = " and ".join(key_ingredients)
+    return (
+        f"This track must clearly and audibly feature {joined} -- not faintly buried in "
+        "the background, but a clear, prominent, unmistakable presence in the mix "
+        "throughout the track."
+    )
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line options for one-shot track generation."""
@@ -759,6 +820,29 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="Override CFG guidance. Only base model uses this.",
+    )
+    parser.add_argument(
+        "--lm-cfg-scale",
+        type=float,
+        default=2.0,
+        help=(
+            "5Hz LM classifier-free guidance scale (was hardcoded at 2.0). Higher = "
+            "stronger LM adherence to the prompt/locked metadata (including keyscale) "
+            "during composition -- this is the phase that writes the actual note/pitch "
+            "content, so it's a more direct lever for key adherence than --guidance-scale, "
+            "which mostly affects the DiT's rendering of caption/mix description."
+        ),
+    )
+    parser.add_argument(
+        "--negative-prompt",
+        default=DEFAULT_NEGATIVE_PROMPT,
+        help=(
+            "5Hz LM negative prompt. The LM substitutes this as the CFG unconditional "
+            "prompt, so lm_cfg_scale actively steers composition away from whatever this "
+            "describes -- a stronger lever than caption-text guidance for excluding a "
+            "specific character (e.g. shrill high synths). Only takes effect when "
+            "--lm-cfg-scale > 1.0 (default 2.0). Pass '' to disable."
+        ),
     )
     parser.add_argument(
         "--no-adg",
@@ -999,6 +1083,7 @@ def create_genre_prompt(
     duration: float,
     keyscale: str,
     cover_artist: str | None = None,
+    key_ingredients: list[str] | None = None,
 ) -> dict[str, object]:
     """Create a fresh genre-matched prompt with the existing 5Hz LM API."""
     if args.no_smart_prompt:
@@ -1018,6 +1103,7 @@ def create_genre_prompt(
         f"this genre profile: {profile['caption']}. Make it different from previous ideas, "
         f"with concrete instrumentation, arrangement, groove, mood, and production details. "
         f"{minor_key_guidance(keyscale)} "
+        f"{key_ingredient_guidance(key_ingredients or [])} "
         f"{resolve_instrument_guidance(genre)} "
         f"Keep the rhythm locked to {profile['bpm']} BPM in 4/4. Drums must be on-beat, "
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
@@ -1154,6 +1240,7 @@ def build_generation_params(
     duration: float,
     keyscale: str,
     cover_artist: str | None = None,
+    key_ingredients: list[str] | None = None,
 ) -> GenerationParams:
     """Build generation parameters from parsed command-line options."""
     profile = GENRE_PROFILES[genre]
@@ -1194,6 +1281,9 @@ def build_generation_params(
 
     caption = f"{caption.rstrip('.')}. {MIN_LAYER_GUARANTEE}"
     caption = f"{caption.rstrip('.')}. {FREQUENCY_BALANCE_GUARANTEE}"
+    ingredient_guidance = key_ingredient_guidance(key_ingredients or [])
+    if ingredient_guidance:
+        caption = f"{caption.rstrip('.')}. {ingredient_guidance}"
 
     # GenerationParams has no dedicated genre field -- genre is conveyed purely through
     # caption text, and training captions consistently name the genre right at the start
@@ -1229,7 +1319,8 @@ def build_generation_params(
         seed=args.seed,
         thinking=True,
         lm_temperature=0.85,
-        lm_cfg_scale=2.0,
+        lm_cfg_scale=args.lm_cfg_scale,
+        lm_negative_prompt=args.negative_prompt or "NO USER INPUT",
         lm_top_p=0.9,
         use_cot_metas=True,
         use_cot_caption=False,
@@ -1906,14 +1997,19 @@ def generate_track_chunk(
             "Cover style reference: {} type beat (style-inspired only, not a literal cover)",
             cover_artist,
         )
+    key_ingredients = resolve_key_ingredients(genre)
+    if key_ingredients:
+        logger.info("Forced key ingredients: {}", ", ".join(key_ingredients))
     while True:
         sample = create_genre_prompt(
-            llm_handler, args, genre, track_index, duration, keyscale, cover_artist
+            llm_handler, args, genre, track_index, duration, keyscale, cover_artist, key_ingredients
         )
         result = generate_music(
             dit_handler=dit_handler,
             llm_handler=llm_handler,
-            params=build_generation_params(args, genre, sample, duration, keyscale, cover_artist),
+            params=build_generation_params(
+                args, genre, sample, duration, keyscale, cover_artist, key_ingredients
+            ),
             config=build_generation_config_for_track(args, track_index, chunk_size, seed_offset),
             save_dir=str(save_dir),
         )
