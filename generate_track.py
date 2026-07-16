@@ -44,7 +44,11 @@ DEFAULT_TONE_PROFILE = "reference"
 # When the gain needed to hit the LUFS target would push true peak past the ceiling
 # minus this margin, the final stage switches from pure gain to gain + oversampled limiting.
 LOUDNESS_LIMITER_MARGIN_DB = 0.2
-MONO_BASS_CROSSOVER_HZ = 120  # below this the mix is summed to mono (LR4 split), like the reference
+MONO_BASS_CROSSOVER_HZ = 200  # below this the mix is summed to mono (LR4 split); a kick's
+# "knock"/punch body commonly sits 150-300 Hz, above the sub-only 120 Hz the reference
+# master itself measured at -- raised so kick/bass read as centered by default, not just
+# via --mono-bass-crossover-hz (confirmed empirically: 120 Hz left a 200 Hz wide-stereo
+# test signal at 0.46 L/R correlation after mastering; 250 Hz brought it to 0.92).
 _INTERMEDIATE_CODEC_ARGS = ["-c:a", "pcm_s24le", "-ar", "48000"]
 DEFAULT_STRUCTURE = "intro, chorus, verse, chorus, verse, outro"
 DEFAULT_TIME_SIGNATURE = "4"
@@ -121,6 +125,25 @@ def resolve_instrument_guidance(genre: str) -> str:
     return PRODUCED_INSTRUMENT_GUIDANCE if genre in ELECTRONIC_GENRES else NATURAL_INSTRUMENT_GUIDANCE
 
 
+def minor_key_guidance(keyscale: str) -> str:
+    """Return a strict natural-minor instruction anchored to the locked key.
+
+    The dedicated ``keyscale`` conditioning field alone is not reliably enough to
+    keep the model in minor -- it commonly drifts to a relative/parallel major
+    resolution or a Picardy third at cadences and outros. Used in the natural-
+    language LM query only (not the final DiT caption -- that text encoder never
+    saw key described in prose during training, so restating it there would be
+    out-of-distribution; the dedicated keyscale field already covers that path).
+    """
+    return (
+        f"Stay in natural minor the entire track, in {keyscale}: every section, chord "
+        f"progression, cadence, and the ending must resolve within {keyscale} minor. "
+        f"Do not modulate or resolve to the relative or parallel major, do not add a "
+        f"Picardy third or major-tonic ending, and avoid bright, happy, or major-mode "
+        f"chord borrowings anywhere in the harmony or melody."
+    )
+
+
 def resolve_mix_guidance(args: argparse.Namespace) -> str:
     """Pick the prompt-side mix direction that matches the mastering tone profile.
 
@@ -165,7 +188,9 @@ MELODY_REGISTER_GUIDANCE = (
 MINIMAL_ARRANGEMENT_GUIDANCE = (
     "Keep the arrangement minimal and spacious like a polished, professional record that "
     "trusts restraint, not a beginner or demo-level arrangement. Use only a few purposeful "
-    "layers at once (for example drums, bass, one harmonic layer, one melodic hook), each "
+    "layers at once: drums, bass, and always at least one melodic or harmonic instrument "
+    "(guitar, piano, synth, horn, strings, etc.) -- never drums and bass alone, that reads "
+    "as an unfinished sketch rather than a minimal production. Each layer should be "
     "performed with the same skill, groove, and detail as a full commercial production; the "
     "simplicity must come from smart arrangement and mixing choices, not from thin, basic, "
     "or amateur-sounding parts. Give instruments complementary rhythmic and melodic roles so "
@@ -202,6 +227,25 @@ MUSICALITY_GUIDANCE = (
 CONCISE_QUALITY_HINT = (
     "Performed by skilled professional musicians with a clean, polished mix, real chord "
     "movement, and dynamic contrast between sections rather than a static loop."
+)
+# Applied unconditionally (see build_generation_params) rather than checked-and-skipped
+# like the hints above: "minimal arrangement" guidance can get interpreted as license to
+# go all the way down to just drums + bass, which reads as an unfinished sketch rather
+# than a minimal *production*. This is a hard floor, safe to always state.
+MIN_LAYER_GUARANTEE = (
+    "The arrangement must never be just drums and bass alone -- always layer in at least "
+    "one clear melodic or harmonic instrument (guitar, piano, synth, horn, strings, etc.) "
+    "idiomatic to the genre, audible throughout."
+)
+# Same unconditional-guarantee pattern as MIN_LAYER_GUARANTEE: the fuller WARM_MIX_GUIDANCE/
+# MIX_CLARITY_GUIDANCE text only reaches the LM query (create_genre_prompt), so an LM-authored
+# caption isn't guaranteed to carry the bass/highs balance through, and the profile-fallback
+# caption never mentioned it at all -- some renders came out with weak/missing bass or
+# fizzy, dominant hi-hats and cymbals. State it directly and briefly in every final caption.
+FREQUENCY_BALANCE_GUARANTEE = (
+    "Full-frequency mix with present, deep, well-defined bass and low end throughout -- "
+    "never thin or bass-light. Hi-hats, cymbals, and percussion stay smooth and "
+    "well-controlled, never harsh, fizzy, piercing, or dominating the mix."
 )
 SECTION_BLUEPRINT = [
     ("Intro", 0.12, "sparse setup over the same steady pulse, hinting the groove"),
@@ -618,6 +662,17 @@ def parse_args() -> argparse.Namespace:
         help="Skip the tone-mastering pass (EQ, dynamic de-harsh, mono-bass crossover).",
     )
     parser.add_argument(
+        "--mono-bass-crossover-hz",
+        type=int,
+        default=MONO_BASS_CROSSOVER_HZ,
+        help=(
+            "Frequency below which the mix is summed to mono during mastering. Default "
+            "200 Hz covers sub weight, bass fundamentals, and a kick's knock/punch body; "
+            "lower toward 100-120 if this is squashing legitimate bassline stereo "
+            "movement, or raise past 250 for still-wider kick/bass."
+        ),
+    )
+    parser.add_argument(
         "--enable-apollo-restoration",
         action="store_true",
         help=(
@@ -916,10 +971,11 @@ def create_genre_prompt(
         f"{track_index + 1} of {amount}. The track must be a complete "
         f"approximately {int(round(duration))}-second instrumental. "
         f"It must be fully instrumental with no sung or spoken vocals. It must follow this "
-        f"exact section timeline: {section_plan}. It must strongly match "
+        f"exact section timeline: {section_plan}. Open the caption by explicitly naming "
+        f"the genre '{genre}' and it must strongly match "
         f"this genre profile: {profile['caption']}. Make it different from previous ideas, "
         f"with concrete instrumentation, arrangement, groove, mood, and production details. "
-        f"Use exact minor key {keyscale}; do not use major key harmony or off-key notes. "
+        f"{minor_key_guidance(keyscale)} "
         f"{resolve_instrument_guidance(genre)} "
         f"Keep the rhythm locked to {profile['bpm']} BPM in 4/4. Drums must be on-beat, "
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
@@ -1085,7 +1141,27 @@ def build_generation_params(
         caption = profile["caption"]
         if args.prompt.strip():
             caption = f"{caption}, {args.prompt.strip()}"
-        caption = f"{caption}. {CONCISE_QUALITY_HINT}"
+
+    # Always append the quality hint, not just in the fallback branch above -- the LM's
+    # own caption is asked (in create_genre_prompt's query) to convey skilled/human
+    # performance, but isn't guaranteed to actually say so, same class of gap as the
+    # missing-genre-name issue below. Cheap check avoids stacking near-duplicate phrasing
+    # when the LM's caption already covers it.
+    if "skilled" not in caption.lower() and "professional" not in caption.lower():
+        caption = f"{caption.rstrip('.')}. {CONCISE_QUALITY_HINT}"
+
+    caption = f"{caption.rstrip('.')}. {MIN_LAYER_GUARANTEE}"
+    caption = f"{caption.rstrip('.')}. {FREQUENCY_BALANCE_GUARANTEE}"
+
+    # GenerationParams has no dedicated genre field -- genre is conveyed purely through
+    # caption text, and training captions consistently name the genre right at the start
+    # (e.g. "An explosive... pop-rock track...", "A dark, atmospheric trap track...").
+    # The LM's own caption isn't guaranteed to say "afropop" explicitly even when asked
+    # to write one, so anchor it explicitly here rather than trusting that alone --
+    # without it, ambiguous instrumentation descriptions can drift toward a different
+    # genre's idiom (e.g. brushed/swung drums read as jazz instead of afropop).
+    if genre.lower() not in caption.lower():
+        caption = f"{genre} track: {caption}"
 
     caption = (
         f"{caption.rstrip('.')}, fully instrumental with no sung or spoken vocals."
@@ -1286,14 +1362,17 @@ def finalize_loudness(
                 logger.warning("Could not remove temporary LUFS file: {}", temp_path)
 
 
-def _mono_bass_split(inner_chain: str) -> str:
+def _mono_bass_split(inner_chain: str, crossover_hz: int = MONO_BASS_CROSSOVER_HZ) -> str:
     """Wrap a filter chain in an LR4 crossover that sums lows to mono.
 
     Two cascaded 2nd-order Butterworth sections per band form a Linkwitz-Riley 4th-order
     crossover, so the recombined bands sum flat. Everything below the crossover is
     center-panned -- standard practice on commercial masters (and what the reference does).
+
+    Default crossover_hz (200) covers sub weight, bass fundamentals, and a kick's
+    "knock"/punch body, which commonly extends past the sub-only ~120 Hz range.
     """
-    xo = MONO_BASS_CROSSOVER_HZ
+    xo = crossover_hz
     return (
         f"[0:a]asplit=2[lo_in][hi_in];"
         f"[lo_in]lowpass=f={xo}:p=2,lowpass=f={xo}:p=2,"
@@ -1376,7 +1455,11 @@ def build_tone_profile_chain(profile: str) -> str:
     return ",".join(stages)
 
 
-def apply_tone_mastering(path: str, profile: str = DEFAULT_TONE_PROFILE) -> bool:
+def apply_tone_mastering(
+    path: str,
+    profile: str = DEFAULT_TONE_PROFILE,
+    mono_bass_crossover_hz: int = MONO_BASS_CROSSOVER_HZ,
+) -> bool:
     """Apply the tone-shaping stage (EQ + dynamic de-harsh + mono bass, no limiting)."""
     if not path:
         return False
@@ -1391,7 +1474,7 @@ def apply_tone_mastering(path: str, profile: str = DEFAULT_TONE_PROFILE) -> bool
     if profile not in TONE_PROFILE_NAMES:
         profile = DEFAULT_TONE_PROFILE
     inner_chain = build_tone_profile_chain(profile)
-    filter_complex = _mono_bass_split(inner_chain)
+    filter_complex = _mono_bass_split(inner_chain, mono_bass_crossover_hz)
     temp_path = source_path.with_name(f"{source_path.stem}.clarity_tmp{source_path.suffix}")
     try:
         _run_ffmpeg(
@@ -1407,7 +1490,12 @@ def apply_tone_mastering(path: str, profile: str = DEFAULT_TONE_PROFILE) -> bool
             ]
         )
         temp_path.replace(source_path)
-        logger.info("Applied tone mastering ('{}' profile, mono-bass LR4): {}", profile, source_path)
+        logger.info(
+            "Applied tone mastering ('{}' profile, mono-bass LR4 @ {} Hz): {}",
+            profile,
+            mono_bass_crossover_hz,
+            source_path,
+        )
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
@@ -1979,7 +2067,9 @@ def main() -> int:
                     )
                 clarity_mastered = False
                 if not args.disable_clarity_mastering:
-                    clarity_mastered = apply_tone_mastering(audio_path, args.tone_profile)
+                    clarity_mastered = apply_tone_mastering(
+                        audio_path, args.tone_profile, args.mono_bass_crossover_hz
+                    )
                 faded_out = False
                 if not args.disable_fade_out:
                     faded_out = apply_fade_out(audio_path, args.fade_out_seconds)
