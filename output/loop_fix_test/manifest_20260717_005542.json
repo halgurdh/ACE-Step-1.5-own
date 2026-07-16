@@ -37,12 +37,12 @@
   "offload": false,
   "files": [
     {
-      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\budget_test\\afropop-market-highlife-take.mp3",
-      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\budget_test\\99180776-b9aa-e783-1fe5-d774a8a39e22.wav",
+      "path": "J:\\Ai\\ACE-Step-1.5-own\\output\\loop_fix_test\\afropop-joy-market-take.mp3",
+      "original_path": "J:\\Ai\\ACE-Step-1.5-own\\output\\loop_fix_test\\51b3cbb0-065d-7bc2-9617-c535737ebd69.wav",
       "wav_master_path": null,
       "genre": "afropop",
-      "target_duration": 157.8,
-      "key": "D minor",
+      "target_duration": 159.4,
+      "key": "A minor",
       "section_plan": [
         {
           "name": "Intro",
@@ -53,35 +53,35 @@
         {
           "name": "Chorus",
           "start": "0:19",
-          "end": "0:50",
+          "end": "0:51",
           "description": "main hook, fuller drums, strongest motif; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "0:50",
-          "end": "1:20",
+          "start": "0:51",
+          "end": "1:21",
           "description": "reduced arrangement, new melodic movement; same steady groove"
         },
         {
           "name": "Chorus",
-          "start": "1:20",
-          "end": "1:52",
+          "start": "1:21",
+          "end": "1:53",
           "description": "hook returns with extra layers and fills; groove and tempo unchanged"
         },
         {
           "name": "Verse",
-          "start": "1:52",
-          "end": "2:22",
+          "start": "1:53",
+          "end": "2:23",
           "description": "second variation, different instrument focus; same steady groove"
         },
         {
           "name": "Outro",
-          "start": "2:22",
-          "end": "2:38",
+          "start": "2:23",
+          "end": "2:39",
           "description": "strip down over the same pulse and resolve cleanly"
         }
       ],
-      "seed": 3235496721,
+      "seed": 1870421310,
       "track_number": 1,
       "target_lufs": -14.0,
       "true_peak_db": -1.0,
@@ -93,5 +93,6 @@
       "fade_out_seconds": 2.0,
       "faded_out": true
     }
-  ]
+  ],
+  "failed_chunks": []
 }

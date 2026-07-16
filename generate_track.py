@@ -2239,6 +2239,7 @@ def main() -> int:
     llm_handler = initialize_lm(args)
     audios = []
     file_entries = []
+    failed_chunks = []
     for genre_index, genre in enumerate(genres):
         logger.info("Starting genre: {}", genre)
         seed_offset = genre_index * amount
@@ -2270,8 +2271,17 @@ def main() -> int:
             )
 
             if not result.success:
-                logger.error(result.status_message)
-                return 1
+                logger.error(
+                    "Skipping rest of {} (track {}/{}) after generation failure: {}",
+                    genre,
+                    track_index + 1,
+                    amount,
+                    result.status_message,
+                )
+                failed_chunks.append(
+                    {"genre": genre, "track_index": track_index, "error": result.status_message}
+                )
+                break
             audios.extend(result.audios)
             saved_count = len(result.audios)
             for offset, audio in enumerate(result.audios):
@@ -2333,8 +2343,16 @@ def main() -> int:
                     }
                 )
             if saved_count < 1:
-                logger.error("Generation returned no audio files for requested chunk")
-                return 1
+                logger.error(
+                    "Skipping rest of {} (track {}/{}): generation returned no audio files",
+                    genre,
+                    track_index + 1,
+                    amount,
+                )
+                failed_chunks.append(
+                    {"genre": genre, "track_index": track_index, "error": "no audio files returned"}
+                )
+                break
             if saved_count < chunk_size:
                 logger.warning(
                     "Requested {} tracks in one call but only {} were saved; continuing sequentially.",
@@ -2369,14 +2387,21 @@ def main() -> int:
         "guidance_scale": resolve_guidance_scale(args),
         "offload": resolve_offload(args),
         "files": file_entries,
+        "failed_chunks": failed_chunks,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-    logger.info("Saved tracks: {}/{}", len(audios), amount)
+    logger.info("Saved tracks: {}/{}", len(audios), amount * len(genres))
     logger.info("Manifest: {}", manifest_path)
+    if failed_chunks:
+        logger.warning(
+            "{} genre(s) stopped early after a generation failure -- see failed_chunks in the manifest: {}",
+            len(failed_chunks),
+            ", ".join(f"{c['genre']} (track {c['track_index'] + 1})" for c in failed_chunks),
+        )
     for audio in audios:
         print(audio.get("path", "(in-memory)"))
-    return 0
+    return 1 if (failed_chunks and not audios) else 0
 
 
 if __name__ == "__main__":
