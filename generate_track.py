@@ -20,7 +20,7 @@ from pathlib import Path
 from loguru import logger
 
 import score_track
-from acestep.gpu_config import get_global_gpu_config, resolve_lm_backend
+from acestep.gpu_config import get_global_gpu_config, is_mps_platform, resolve_lm_backend
 from acestep.handler import AceStepHandler
 from acestep.inference import GenerationConfig, GenerationParams, create_sample, generate_music
 from acestep.llm_inference import LLMHandler
@@ -816,6 +816,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable automatic DiT CPU offload.",
     )
+    parser.add_argument(
+        "--quantization",
+        default="auto",
+        choices=["auto", "int8_weight_only", "fp8_weight_only", "w8a8_dynamic", "none"],
+        help=(
+            "DiT weight quantization. 'auto' follows the GPU tier default (matches the "
+            "Gradio UI/acestep_v15_pipeline.py behavior) -- int8_weight_only on most CUDA "
+            "GPUs, w8a8_dynamic on pre-Volta (compute capability <7), disabled on Mac. "
+            "'none' forces full precision regardless of tier. Previously this was never "
+            "wired up here (always full precision), which is fine for the small 2B models "
+            "but risks VRAM exhaustion / crashes with the XL (4B) DiT or 4B LM on <=8GB GPUs."
+        ),
+    )
     args = parser.parse_args()
     amount = args.batch_size if args.batch_size is not None else args.amount
     if amount < 1:
@@ -899,6 +912,34 @@ def resolve_offload_dit(args: argparse.Namespace) -> bool:
     return bool(resolve_offload(args) and getattr(gpu_config, "offload_dit_to_cpu_default", False))
 
 
+def resolve_quantization(args: argparse.Namespace) -> str | None:
+    """Return the DiT weight-quantization mode, mirroring acestep_v15_pipeline.py's default.
+
+    Previously unwired here -- DiT init always ran full precision regardless of GPU tier,
+    which is harmless on the small 2B models but risks VRAM exhaustion (observed: a hard
+    segfault) with the XL (4B) DiT / 4B LM on <=8GB GPUs where the tier config calls for
+    INT8 quantization by default.
+    """
+    if args.quantization == "none":
+        return None
+    if args.quantization != "auto":
+        return args.quantization
+    if is_mps_platform():
+        return None
+    gpu_config = get_global_gpu_config()
+    if not getattr(gpu_config, "quantization_default", False):
+        return None
+    quantization = "int8_weight_only"
+    try:
+        import torch
+
+        if torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] < 7:
+            quantization = "w8a8_dynamic"
+    except Exception as exc:
+        logger.warning("Quantization auto-detect failed, using int8_weight_only: {}", exc)
+    return quantization
+
+
 def initialize_dit(args: argparse.Namespace) -> AceStepHandler:
     """Initialize and return the ACE-Step DiT handler."""
     handler = AceStepHandler()
@@ -908,6 +949,7 @@ def initialize_dit(args: argparse.Namespace) -> AceStepHandler:
         device=args.device,
         offload_to_cpu=resolve_offload(args),
         offload_dit_to_cpu=resolve_offload_dit(args),
+        quantization=resolve_quantization(args),
     )
     if not success:
         raise RuntimeError(f"DiT initialization failed: {status}")

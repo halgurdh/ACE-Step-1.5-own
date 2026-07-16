@@ -118,11 +118,11 @@ uv run acestep
 uv run acestep-api
 
 # GENERATE MORE...
-python generate_track.py --quality ultra --guidance-scale 3.5 --duration 150 --all-genres --amount 20 --format mp3 --target-lufs -14 --concurrency 1 --enable-apollo-restoration --enable-audiosr-upscale
+python generate_track.py --quality ultra --guidance-scale 7.0 --duration 150 --all-genres --amount 20 --format mp3 --target-lufs -14 --concurrency 1 --enable-apollo-restoration --enable-audiosr-upscale
 
-python generate_track.py --quality ultra --guidance-scale 3.5 --duration 150 --genre afropop --amount 1 --format mp3 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25
+python generate_track.py --quality ultra --guidance-scale 7.0 --duration 150 --genre afropop --amount 1 --format mp3 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25
 
-python generate_track.py --quality ultra --guidance-scale 3.5 --duration 150 --all-genres --amount 20 --format mp3 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2
+python generate_track.py --quality ultra --guidance-scale 7.0 --duration 150 --all-genres --amount 20 --format mp3 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2
 
 ```
 
