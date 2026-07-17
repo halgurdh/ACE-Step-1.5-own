@@ -921,12 +921,12 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         choices=["auto", "int8_weight_only", "fp8_weight_only", "w8a8_dynamic", "none"],
         help=(
-            "DiT weight quantization. 'auto' follows the GPU tier default (matches the "
-            "Gradio UI/acestep_v15_pipeline.py behavior) -- int8_weight_only on most CUDA "
-            "GPUs, w8a8_dynamic on pre-Volta (compute capability <7), disabled on Mac. "
-            "'none' forces full precision regardless of tier. Previously this was never "
-            "wired up here (always full precision), which is fine for the small 2B models "
-            "but risks VRAM exhaustion / crashes with the XL (4B) DiT or 4B LM on <=8GB GPUs."
+            "DiT weight quantization. 'auto' only applies to XL (4B) DiT models, following "
+            "the GPU tier default there (int8_weight_only on most CUDA GPUs, w8a8_dynamic "
+            "on pre-Volta, disabled on Mac) -- 2B models (base/sft/turbo) always run full "
+            "precision under 'auto' since they fit 8GB fine unquantized and quantizing them "
+            "forces a broken per-parameter CPU<->GPU transfer fallback on older torch that "
+            "isn't stable over long runs. Force a value to override either way."
         ),
     )
     args = parser.parse_args()
@@ -1013,18 +1013,29 @@ def resolve_offload_dit(args: argparse.Namespace) -> bool:
 
 
 def resolve_quantization(args: argparse.Namespace) -> str | None:
-    """Return the DiT weight-quantization mode, mirroring acestep_v15_pipeline.py's default.
+    """Return the DiT weight-quantization mode, mirroring acestep_v15_pipeline.py's default
+    but scoped to models that actually need it.
 
     Previously unwired here -- DiT init always ran full precision regardless of GPU tier,
     which is harmless on the small 2B models but risks VRAM exhaustion (observed: a hard
     segfault) with the XL (4B) DiT / 4B LM on <=8GB GPUs where the tier config calls for
-    INT8 quantization by default.
+    INT8 quantization by default. Fixing that by blindly following the tier default for
+    *every* model was itself a regression: quantizing the small 2B models forces a broken
+    fallback path on this torch version (AffineQuantizedTensor.to() raises
+    NotImplementedError, so parameters get moved one at a time on every single CPU<->GPU
+    offload cycle instead of a batched .to() call) that isn't stable over many repeated
+    cycles -- observed as a hard crash (silent, no Python traceback) after ~9 tracks in an
+    --all-genres batch that ran for hours crash-free before quantization was ever wired up.
+    2B models (base/sft/turbo) fit comfortably in 8GB unquantized -- only the XL (4B) DiT
+    variants actually need this tradeoff.
     """
     if args.quantization == "none":
         return None
     if args.quantization != "auto":
         return args.quantization
     if is_mps_platform():
+        return None
+    if "-xl-" not in resolve_model(args).lower():
         return None
     gpu_config = get_global_gpu_config()
     if not getattr(gpu_config, "quantization_default", False):

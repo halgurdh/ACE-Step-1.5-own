@@ -122,9 +122,11 @@ python generate_track.py --quality best --guidance-scale 7.0 --duration 150 --al
 
 python generate_track.py  --quality best --guidance-scale 7.0 --duration 150 --genre afropop --amount 1 --format mp3 --no-adg --lm-cfg-scale 3.0 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2
 
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "python generate_track.py --quality best --guidance-scale 7.0 --duration 150 --all-genres --amount 20 --format mp3 --no-adg --lm-cfg-scale 3.0 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2"
+python generate_track.py --quality best --guidance-scale 7.0 --duration 150 --all-genres --amount 20 --format mp3 --no-adg --no-offload-dit --lm-cfg-scale 3.0 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2 --output-dir output/all_genres_run2
 
+ Start-Process -FilePath python -ArgumentList "generate_track.py --quality best --guidance-scale 7.0 --duration 150 --all-genres --amount 20 --format mp3 --no-adg --no-offload-dit --lm-cfg-scale 3.0 --target-lufs -14 --enable-apollo-restoration --enable-audiosr-upscale --audiosr-ddim-steps 25 --candidates 2 --output-dir output/all_genres_run2" -RedirectStandardOutput output\all_genres_run\stdout2.log -RedirectStandardError output\all_genres_run\stderr2.log -WindowStyle Hidden -PassThru | Select-Object Id | Tee-Object -FilePath output\all_genres_run\pid2.txt
 
+ 
 ```
 
 Open http://localhost:7860 (Gradio) or http://localhost:8001 (API).
