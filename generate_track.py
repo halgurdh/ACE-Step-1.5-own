@@ -365,6 +365,11 @@ GENRE_PROFILES = {
         ),
         "bpm": 70,
         "bpm_range": (56, 88),
+        "extra_guidance": (
+            "Drums must stay very soft and quiet the entire track -- brushed kit only, "
+            "no loud hits, accents, fills, or cymbal crashes; the drums sit gently in the "
+            "background supporting the piano and never draw attention to themselves."
+        ),
     },
     "celtic": {
         "caption": (
@@ -413,6 +418,11 @@ GENRE_PROFILES = {
         ),
         "bpm": 174,
         "bpm_range": (160, 178),
+        "extra_guidance": (
+            "This must feel unmistakably fast and driving at full tempo (140+ BPM, true "
+            "double-time breakbeat energy) throughout -- never a half-time, laid-back, or "
+            "downtempo feel; avoid any dragging or slowed-down groove."
+        ),
     },
     "electronic": {
         "caption": (
@@ -610,6 +620,17 @@ def parse_args() -> argparse.Namespace:
         "--all-genres",
         action="store_true",
         help="Generate for every built-in genre. --amount applies per genre.",
+    )
+    parser.add_argument(
+        "--continue",
+        dest="resume",
+        action="store_true",
+        help=(
+            "Resume into an existing --output-dir instead of regenerating from track 1. "
+            "For each genre, counts audio files already named with that genre's slug "
+            "prefix and skips ahead to that track index, so an interrupted --all-genres "
+            "batch can be restarted without redoing finished genres/tracks."
+        ),
     )
     parser.add_argument(
         "--cover",
@@ -1071,10 +1092,11 @@ def initialize_dit(args: argparse.Namespace) -> AceStepHandler:
 def initialize_lm(args: argparse.Namespace) -> LLMHandler:
     """Initialize and return the 5Hz language-model handler."""
     backend = resolve_lm_backend(args.lm_backend, get_global_gpu_config())
+    lm_model_path = resolve_lm_model_path(args.lm_model)
     handler = LLMHandler()
     status, success = handler.initialize(
         checkpoint_dir=str(CHECKPOINT_DIR),
-        lm_model_path=args.lm_model,
+        lm_model_path=lm_model_path,
         backend=backend,
         device=args.device,
         offload_to_cpu=resolve_offload(args),
@@ -1084,6 +1106,33 @@ def initialize_lm(args: argparse.Namespace) -> LLMHandler:
         raise RuntimeError(f"5Hz LM initialization failed: {status}")
     logger.info(status)
     return handler
+
+
+def resolve_lm_model_path(lm_model: str | None) -> str | None:
+    """Return a normalized LM checkpoint path/name and fail early if it is missing."""
+    if lm_model is None:
+        return None
+
+    normalized = lm_model.strip().strip("\"'")
+    if not normalized:
+        return None
+
+    candidate = Path(normalized)
+    if not candidate.is_absolute():
+        candidate = CHECKPOINT_DIR / normalized
+
+    if candidate.is_dir():
+        return str(candidate)
+
+    available_models = sorted(
+        path.name
+        for path in CHECKPOINT_DIR.iterdir()
+        if path.is_dir() and "5Hz-lm" in path.name
+    )
+    available = ", ".join(available_models) if available_models else "none"
+    raise RuntimeError(
+        f"5Hz LM model not found at {candidate}. Available local LM models: {available}"
+    )
 
 
 def resolve_concurrency(args: argparse.Namespace) -> int:
@@ -1134,6 +1183,7 @@ def create_genre_prompt(
         f"{resolve_instrument_guidance(genre)} "
         f"Keep the rhythm locked to {profile['bpm']} BPM in 4/4. Drums must be on-beat, "
         f"groovy, natural, and idiomatic for {genre}; avoid rushed, unstable, or off-grid drums. "
+        f"{profile.get('extra_guidance', '')} "
         f"{resolve_mix_guidance(args)} "
         f"{MELODY_REGISTER_GUIDANCE} "
         f"{MINIMAL_ARRANGEMENT_GUIDANCE} "
@@ -1190,12 +1240,14 @@ def resolve_genre_bpm(args: argparse.Namespace, genre: str, sample: dict[str, ob
     """Return user, smart, or random genre-safe BPM for one track."""
     if args.bpm is not None:
         return args.bpm
+    profile = GENRE_PROFILES[genre]
+    low, high = profile.get("bpm_range", (profile["bpm"], profile["bpm"]))
     if args.allow_smart_metadata:
         smart_bpm = coerce_optional_int(sample.get("bpm"))
         if smart_bpm is not None:
-            return smart_bpm
-    profile = GENRE_PROFILES[genre]
-    low, high = profile.get("bpm_range", (profile["bpm"], profile["bpm"]))
+            # Clamp to the genre's bpm_range so smart metadata can't drift a track
+            # (e.g. drum & bass) below the tempo the genre requires.
+            return max(int(low), min(int(high), smart_bpm))
     return random.randint(int(low), int(high))
 
 
@@ -2053,6 +2105,16 @@ def rename_audio_file(path: str, genre: str, track_number: int) -> str:
     return str(target_path)
 
 
+def count_existing_tracks(save_dir: Path, genre: str) -> int:
+    """Count audio files in save_dir already named for this genre (for --continue)."""
+    prefix = slugify_title(genre) + "-"
+    return sum(
+        1
+        for path in save_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in (".mp3", ".wav") and path.name.startswith(prefix)
+    )
+
+
 def is_vram_error(result) -> bool:
     """Return whether a generation result failed due to insufficient VRAM."""
     text = " ".join(
@@ -2255,6 +2317,16 @@ def main() -> int:
         logger.info("Starting genre: {}", genre)
         seed_offset = genre_index * amount
         track_index = 0
+        if args.resume:
+            track_index = min(count_existing_tracks(save_dir, genre), amount)
+            if track_index > 0:
+                logger.info(
+                    "Resuming {}: {} track(s) already present, continuing at {}/{}",
+                    genre,
+                    track_index,
+                    track_index,
+                    amount,
+                )
         while track_index < amount:
             chunk_size = min(concurrency, amount - track_index)
             logger.info(
