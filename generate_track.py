@@ -122,7 +122,7 @@ PRODUCED_INSTRUMENT_GUIDANCE = (
     "recording. Avoid harsh, thin, cheap, or amateur-sounding synths; aim for a "
     "professional, radio-ready electronic mix."
 )
-ELECTRONIC_GENRES = {"deep house", "drum & bass", "electronic", "hip hop", "house"}
+ELECTRONIC_GENRES = {"deep house", "drum & bass", "electronic", "hip hop", "house", "reggaeton"}
 
 
 def resolve_instrument_guidance(genre: str) -> str:
@@ -389,6 +389,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 82,
         "bpm_range": (72, 92),
+        "extra_guidance": (
+            "Keep the pad and electric piano in a warm mid or low-mid register -- avoid "
+            "bright, glassy, shimmering, or high-register synth tones anywhere in the mix."
+        ),
     },
     "country": {
         "caption": (
@@ -409,6 +413,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 124,
         "bpm_range": (118, 126),
+        "extra_guidance": (
+            "Keep the chord stabs and pad in a warm mid or low-mid register -- avoid "
+            "bright, glassy, shimmering, or high-register synth tones anywhere in the mix."
+        ),
     },
     "drum & bass": {
         "caption": (
@@ -432,6 +440,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 128,
         "bpm_range": (118, 132),
+        "extra_guidance": (
+            "Keep the synth lead and arpeggio in a warm mid or low-mid register -- avoid "
+            "bright, glassy, shimmering, or high-register synth tones anywhere in the mix."
+        ),
     },
     "funk": {
         "caption": (
@@ -459,6 +471,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 126,
         "bpm_range": (120, 128),
+        "extra_guidance": (
+            "Keep the piano stabs and vocal chop hook in a warm mid or low-mid register -- "
+            "avoid bright, glassy, shimmering, or high-register tones anywhere in the mix."
+        ),
     },
     "indian": {
         "caption": (
@@ -488,6 +504,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 112,
         "bpm_range": (96, 124),
+        "extra_guidance": (
+            "Keep the lead hook and synth layer in a warm mid or low-mid register -- avoid "
+            "bright, glassy, shimmering, or high-register synth tones anywhere in the mix."
+        ),
     },
     "r&b": {
         "caption": (
@@ -497,6 +517,10 @@ GENRE_PROFILES = {
         ),
         "bpm": 78,
         "bpm_range": (68, 92),
+        "extra_guidance": (
+            "Keep the lead guitar or synth line in a warm mid or low-mid register -- avoid "
+            "bright, glassy, shimmering, or high-register tones anywhere in the mix."
+        ),
     },
     "reggae": {
         "caption": (
@@ -517,15 +541,54 @@ GENRE_PROFILES = {
         "bpm": 94,
         "bpm_range": (76, 104),
     },
-    "spanish": {
+    # "spanish" is deliberately not a profile here -- it was generic Spanish-pop/flamenco
+    # and didn't read as anything specific. resolve_spanish_substyle() rotates it to one
+    # of the concrete profiles below (salsa/bachata/reggaeton) per track instead.
+    "salsa": {
         "caption": (
-            "Spanish pop trio: one nylon-string lead guitar, warm bass, and a single "
-            "cajon or palmas pattern as the only percussion, close-miked and intimate, "
-            "romantic melodic phrases, polished Latin studio recording with natural "
-            "stereo width"
+            "high-energy salsa dance band: bright piano montuno pattern, syncopated conga "
+            "and timbale percussion driving the clave, güira scraper, walking upright bass "
+            "tumbao, and punchy trumpet and trombone horn stabs, polished Latin dance-floor "
+            "recording with a wide, energetic stereo mix"
         ),
-        "bpm": 104,
-        "bpm_range": (88, 120),
+        "bpm": 180,
+        "bpm_range": (160, 200),
+        "extra_guidance": (
+            "This must sound unmistakably like classic salsa dance music -- driving "
+            "clave-based percussion, a clear piano montuno, and horn stabs must all be "
+            "clearly audible throughout, not generic Latin pop."
+        ),
+    },
+    "bachata": {
+        "caption": (
+            "romantic bachata band: lead requinto guitar playing melodic arpeggiated runs, "
+            "rhythm guitar strumming the bachata pattern, bongo and güira percussion, warm "
+            "rounded electric bass, intimate close-miked Dominican studio recording with a "
+            "romantic, danceable groove"
+        ),
+        "bpm": 130,
+        "bpm_range": (120, 145),
+        "extra_guidance": (
+            "This must sound unmistakably like bachata -- the lead requinto guitar melody, "
+            "rhythm guitar strum pattern, and bongo/güira groove must all be clearly audible "
+            "throughout, not generic Latin pop or flamenco."
+        ),
+    },
+    "reggaeton": {
+        "caption": (
+            "modern reggaeton track: classic dembow riddim drum pattern, deep sub-bass, "
+            "dark moody synth stabs and pads, crisp modern hi-hats, polished urban Latin "
+            "club production with heavy low end"
+        ),
+        "bpm": 95,
+        "bpm_range": (88, 100),
+        "extra_guidance": (
+            "This must sound unmistakably like reggaeton -- the dembow riddim drum pattern "
+            "and deep sub-bass must be clearly audible and drive the entire track, with "
+            "modern produced electronic instrumentation, not a live band. Keep the synth "
+            "stabs and pads in a warm mid or low-mid register -- avoid bright, glassy, or "
+            "high-register synth tones anywhere in the mix."
+        ),
     },
 }
 
@@ -548,7 +611,9 @@ ARTIST_REFERENCES = {
     "r&b": ["SZA", "Frank Ocean", "H.E.R.", "Daniel Caesar", "Summer Walker"],
     "reggae": ["Bob Marley", "Chronixx", "Damian Marley", "Sean Paul", "Protoje"],
     "soul": ["Aretha Franklin", "Sam Cooke", "Anderson .Paak", "Leon Bridges", "Amy Winehouse"],
-    "spanish": ["Rosalia", "Bad Bunny", "Shakira", "Manu Chao", "Alejandro Sanz"],
+    "salsa": ["Marc Anthony", "Celia Cruz", "Rubén Blades", "Héctor Lavoe", "Willie Colón"],
+    "bachata": ["Romeo Santos", "Aventura", "Juan Luis Guerra", "Prince Royce", "Antony Santos"],
+    "reggaeton": ["Bad Bunny", "J Balvin", "Daddy Yankee", "Karol G", "Rauw Alejandro"],
 }
 
 # Signature instruments/production elements per genre, drawn from that genre's own
@@ -577,7 +642,9 @@ KEY_INGREDIENTS = {
     "r&b": ["silky electric piano", "lead guitar or synth line", "smooth deep bass"],
     "reggae": ["offbeat guitar skank", "organ bubble", "deep rounded bass"],
     "soul": ["vintage electric piano", "expressive guitar", "brass accents"],
-    "spanish": ["nylon-string lead guitar", "cajon or palmas pattern", "warm bass"],
+    "salsa": ["piano montuno pattern", "conga and timbale percussion", "punchy horn stabs"],
+    "bachata": ["lead requinto guitar", "bongo and güira percussion", "rhythm guitar strum pattern"],
+    "reggaeton": ["dembow riddim drum pattern", "deep sub-bass", "dark synth stabs"],
 }
 
 
@@ -969,6 +1036,24 @@ def parse_args() -> argparse.Namespace:
 def resolve_genres(args: argparse.Namespace) -> list[str]:
     """Return the genre list requested by the command line."""
     return list(GENRES) if args.all_genres else [args.genre]
+
+
+SPANISH_SUBSTYLES = ["salsa", "bachata", "reggaeton"]
+
+
+def resolve_spanish_substyle(genre: str) -> str:
+    """Rotate the generic 'spanish' bucket to a concrete Latin dance sub-genre.
+
+    Plain "spanish" read as generic Spanish-pop/flamenco and didn't sound like
+    anything specific. Picking one of salsa/bachata/reggaeton per track -- each
+    with its own GENRE_PROFILES/KEY_INGREDIENTS/ARTIST_REFERENCES entry -- makes
+    the caption, BPM, and instrumentation all agree on one recognizable style
+    instead of blurring several together. Only "spanish" is affected; every
+    other genre passes through unchanged.
+    """
+    if genre != "spanish":
+        return genre
+    return random.choice(SPANISH_SUBSTYLES)
 
 
 def resolve_amount(args: argparse.Namespace) -> int:
@@ -2338,13 +2423,16 @@ def main() -> int:
             )
             duration = resolve_track_duration(args)
             keyscale = resolve_minor_key(args, genre, track_index, seed_offset)
+            generation_genre = resolve_spanish_substyle(genre)
+            if generation_genre != genre:
+                logger.info("Spanish sub-style: {}", generation_genre)
             logger.info("Chunk target duration: {}s", duration)
             logger.info("Chunk key: {}", keyscale)
             result, used_duration = generate_track_candidates(
                 dit_handler=dit_handler,
                 llm_handler=llm_handler,
                 args=args,
-                genre=genre,
+                genre=generation_genre,
                 track_index=track_index,
                 chunk_size=chunk_size,
                 initial_duration=duration,
@@ -2409,6 +2497,7 @@ def main() -> int:
                         "original_path": audio_path,
                         "wav_master_path": None,
                         "genre": genre,
+                        "spanish_substyle": generation_genre if generation_genre != genre else None,
                         "target_duration": used_duration,
                         "key": keyscale,
                         "section_plan": build_section_plan(used_duration),
