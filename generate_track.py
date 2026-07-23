@@ -638,41 +638,109 @@ ARTIST_REFERENCES = {
 # GENRE_PROFILES caption so they never contradict it. Soft mentions in the profile caption
 # (e.g. afropop's "bright interlocking guitar riffs") aren't reliably followed -- generated
 # tracks have come out missing the one instrument that actually makes a genre read as
-# genre-authentic and "professional" rather than generic. resolve_key_ingredients() picks
-# 1-2 per track and key_ingredient_guidance() states them as a hard, unconditional
-# requirement, the same escalation already used for MIN_LAYER_GUARANTEE.
+# genre-authentic and "professional" rather than generic (observed: afropop tracks reduced
+# to just drums, missing the guitar that actually makes it read as afropop). "primary" is
+# the one instrument that most defines the genre's identity -- resolve_key_ingredients()
+# always includes it, unlike "secondary" which is 0-1 randomly sampled for variety on top.
+# key_ingredient_guidance() then states the result as a hard, unconditional requirement,
+# the same escalation already used for MIN_LAYER_GUARANTEE.
 KEY_INGREDIENTS = {
-    "afropop": ["interlocking electric guitar riffs", "upfront shaker percussion", "bright horn stabs"],
-    "arabic": ["expressive oud lead", "darbuka hand percussion", "legato string swells"],
-    "calm jazzy piano": ["expressive piano lead", "muted trumpet or saxophone coloring", "softly brushed drum kit"],
-    "celtic": ["lyrical fiddle lead", "wooden tin whistle", "celtic harp accents"],
-    "chill": ["soft electric piano", "mellow synth pad", "warm round bass"],
-    "country": ["weeping pedal steel guitar", "fiddle accents", "bright acoustic guitar interplay"],
-    "deep house": ["muted chord stabs", "spacious analog pad", "crisp hi-hat pattern"],
-    "drum & bass": ["atmospheric pad", "sparse melodic stabs", "rolling sub bass"],
-    "electronic": ["polished synth lead", "supporting arpeggio", "deep clean bass"],
-    "funk": ["tight slap bass", "clavinet accents", "punchy horn stabs"],
-    "hip hop": ["chopped melodic sample", "sparse electric keys", "deep 808 bass"],
-    "house": ["warm piano stabs", "groovy bassline", "vocal chop hook"],
-    "indian": ["expressive sitar lead", "tabla percussion", "cinematic string swells"],
-    "jazz": ["walking upright bass", "warm piano comping", "saxophone lead"],
-    "pop": ["polished synth layer", "clean rhythm guitar", "catchy lead hook"],
-    "r&b": ["silky electric piano", "lead guitar or synth line", "smooth deep bass"],
-    "reggae": ["offbeat guitar skank", "organ bubble", "deep rounded bass"],
-    "soul": ["vintage electric piano", "expressive guitar", "brass accents"],
-    "salsa": ["piano montuno pattern", "conga and timbale percussion", "punchy horn stabs"],
-    "bachata": ["lead requinto guitar", "bongo and güira percussion", "rhythm guitar strum pattern"],
-    "reggaeton": ["dembow riddim drum pattern", "live congas or horn section", "deep sub-bass"],
+    "afropop": {
+        "primary": "interlocking electric guitar riffs",
+        "secondary": ["upfront shaker percussion", "bright horn stabs"],
+    },
+    "arabic": {
+        "primary": "expressive oud lead",
+        "secondary": ["darbuka hand percussion", "legato string swells"],
+    },
+    "calm jazzy piano": {
+        "primary": "expressive piano lead",
+        "secondary": ["muted trumpet or saxophone coloring", "softly brushed drum kit"],
+    },
+    "celtic": {
+        "primary": "lyrical fiddle lead",
+        "secondary": ["wooden tin whistle", "celtic harp accents"],
+    },
+    "chill": {
+        "primary": "soft electric piano",
+        "secondary": ["mellow synth pad", "warm round bass"],
+    },
+    "country": {
+        "primary": "weeping pedal steel guitar",
+        "secondary": ["fiddle accents", "bright acoustic guitar interplay"],
+    },
+    "deep house": {
+        "primary": "muted chord stabs",
+        "secondary": ["spacious analog pad", "crisp hi-hat pattern"],
+    },
+    "drum & bass": {
+        "primary": "rolling sub bass",
+        "secondary": ["atmospheric pad", "sparse melodic stabs"],
+    },
+    "electronic": {
+        "primary": "polished synth lead",
+        "secondary": ["supporting arpeggio", "deep clean bass"],
+    },
+    "funk": {
+        "primary": "tight slap bass",
+        "secondary": ["clavinet accents", "punchy horn stabs"],
+    },
+    "hip hop": {
+        "primary": "deep 808 bass",
+        "secondary": ["chopped melodic sample", "sparse electric keys"],
+    },
+    "house": {
+        "primary": "warm piano stabs",
+        "secondary": ["groovy bassline", "vocal chop hook"],
+    },
+    "indian": {
+        "primary": "expressive sitar lead",
+        "secondary": ["tabla percussion", "cinematic string swells"],
+    },
+    "jazz": {
+        "primary": "saxophone lead",
+        "secondary": ["walking upright bass", "warm piano comping"],
+    },
+    "pop": {
+        "primary": "catchy lead hook",
+        "secondary": ["polished synth layer", "clean rhythm guitar"],
+    },
+    "r&b": {
+        "primary": "silky electric piano",
+        "secondary": ["lead guitar or synth line", "smooth deep bass"],
+    },
+    "reggae": {
+        "primary": "offbeat guitar skank",
+        "secondary": ["organ bubble", "deep rounded bass"],
+    },
+    "soul": {
+        "primary": "vintage electric piano",
+        "secondary": ["expressive guitar", "brass accents"],
+    },
+    "salsa": {
+        "primary": "piano montuno pattern",
+        "secondary": ["conga and timbale percussion", "punchy horn stabs"],
+    },
+    "bachata": {
+        "primary": "lead requinto guitar",
+        "secondary": ["bongo and güira percussion", "rhythm guitar strum pattern"],
+    },
+    "reggaeton": {
+        "primary": "dembow riddim drum pattern",
+        "secondary": ["live congas or horn section", "deep sub-bass"],
+    },
 }
 
 
 def resolve_key_ingredients(genre: str) -> list[str]:
-    """Return 1-2 randomly chosen signature instruments/elements to force for this track."""
-    candidates = KEY_INGREDIENTS.get(genre, [])
-    if not candidates:
+    """Return the genre's always-forced primary instrument plus 0-1 secondary elements."""
+    entry = KEY_INGREDIENTS.get(genre)
+    if not entry:
         return []
-    count = min(len(candidates), random.randint(1, 2))
-    return random.sample(candidates, count)
+    primary = [entry["primary"]]
+    secondary = entry.get("secondary", [])
+    count = min(len(secondary), random.randint(0, 1))
+    return primary + random.sample(secondary, count)
 
 
 def key_ingredient_guidance(key_ingredients: list[str]) -> str:
