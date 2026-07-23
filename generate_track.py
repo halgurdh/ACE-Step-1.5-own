@@ -39,7 +39,17 @@ VRAM_RETRY_DURATION_STEP_SECONDS = 15.0
 DEFAULT_TARGET_LUFS = -14.0  # streaming delivery standard (Spotify/YouTube/Amazon reference level)
 DEFAULT_TRUE_PEAK_DB = -1.0  # streaming-safe true-peak ceiling (headroom for lossy re-encoding)
 DEFAULT_LOUDNESS_RANGE = 11.0
-DEFAULT_FADE_OUT_SECONDS = 2.0
+DEFAULT_FADE_OUT_SECONDS = 4.0
+# Some generated tracks end with real content, then a silence gap, then a burst of
+# engine-like/noisy artifact instead of a clean stop -- that artifact always follows a
+# silence gap, so scanning the last TAIL_SILENCE_WINDOW_SECONDS for where the audio goes
+# quiet gives a safe trim point that removes both the gap and whatever garbage follows.
+# Threshold/min-duration are deliberately strict (well below normal mix level, and long
+# enough) so a genuinely quiet musical passage near the end isn't mistaken for the gap.
+TAIL_SILENCE_WINDOW_SECONDS = 12.0
+TAIL_SILENCE_NOISE_DB = -35.0
+TAIL_SILENCE_MIN_SECONDS = 0.3
+_SILENCE_START_RE = re.compile(r"silence_start:\s*([0-9.]+)")
 DEFAULT_TONE_PROFILE = "reference"
 DEFAULT_STEREO_WIDTH = 0.7  # ffmpeg stereotools slev: 1.0 = unchanged, <1.0 narrows the
 # side (difference) signal, >1.0 widens. Generated tracks have come out diffuse/unfocused
@@ -274,6 +284,7 @@ SECTION_BLUEPRINT = [
 TITLE_WORDS = {
     "afropop": ["sunrise", "lagos", "golden", "palm", "market", "joy", "highlife"],
     "arabic": ["oud", "desert", "moon", "maqam", "cairo", "silk", "dawn"],
+    "bachata": ["luna", "dulce", "corazon", "romance", "guitarra", "noche", "suspiro"],
     "calm jazzy piano": ["nocturne", "candlelight", "velvet", "hush", "lullaby", "twilight", "reverie"],
     "celtic": ["emerald", "highland", "misty", "glen", "windward", "ancient", "moor"],
     "chill": ["midnight", "soft", "drift", "haze", "quiet", "cloud", "afterglow"],
@@ -289,6 +300,8 @@ TITLE_WORDS = {
     "pop": ["daylight", "spark", "radio", "summer", "heart", "city", "bright"],
     "r&b": ["silk", "velvet", "slow", "afterglow", "midnight", "rose", "warm"],
     "reggae": ["island", "dub", "sun", "roots", "tide", "skank", "irie"],
+    "reggaeton": ["perreo", "calle", "noche", "ritmo", "bajo", "dembow", "fuego"],
+    "salsa": ["ritmo", "clave", "conga", "sabor", "calle", "noche", "son"],
     "soul": ["gold", "church", "warm", "velvet", "heart", "brass", "sunday"],
     "spanish": ["luna", "playa", "rosa", "calle", "noche", "guitarra", "sol"],
 }
@@ -315,6 +328,7 @@ DEFAULT_INSTRUMENTAL_LYRICS = "\n".join(
 GENRES = [
     "afropop",
     "arabic",
+    "bachata",
     "calm jazzy piano",
     "celtic",
     "chill",
@@ -330,6 +344,8 @@ GENRES = [
     "pop",
     "r&b",
     "reggae",
+    "reggaeton",
+    "salsa",
     "soul",
     "spanish",
 ]
@@ -541,9 +557,6 @@ GENRE_PROFILES = {
         "bpm": 94,
         "bpm_range": (76, 104),
     },
-    # "spanish" is deliberately not a profile here -- it was generic Spanish-pop/flamenco
-    # and didn't read as anything specific. resolve_spanish_substyle() rotates it to one
-    # of the concrete profiles below (salsa/bachata/reggaeton) per track instead.
     "salsa": {
         "caption": (
             "high-energy salsa dance band: bright piano montuno pattern, syncopated conga "
@@ -576,18 +589,23 @@ GENRE_PROFILES = {
     },
     "reggaeton": {
         "caption": (
-            "modern reggaeton track: classic dembow riddim drum pattern, deep sub-bass, "
-            "dark moody synth stabs and pads, crisp modern hi-hats, polished urban Latin "
-            "club production with heavy low end"
+            "modern reggaeton track built on a produced dembow riddim drum pattern (kick-kick-"
+            "snare boom-ch-boom-chick syncopation) and deep sub-bass, layered with real live "
+            "percussion (congas and bongos) and a punchy horn section or Spanish guitar riff "
+            "for organic texture, dark moody synth pads used sparingly underneath, crisp "
+            "modern hi-hats, polished urban Latin club production with heavy low end"
         ),
         "bpm": 95,
         "bpm_range": (88, 100),
         "extra_guidance": (
-            "This must sound unmistakably like reggaeton -- the dembow riddim drum pattern "
-            "and deep sub-bass must be clearly audible and drive the entire track, with "
-            "modern produced electronic instrumentation, not a live band. Keep the synth "
-            "stabs and pads in a warm mid or low-mid register -- avoid bright, glassy, or "
-            "high-register synth tones anywhere in the mix."
+            "This must sound unmistakably like reggaeton, built on the dembow riddim -- not "
+            "a hip-hop, trap, or boom-bap beat; the drum pattern must follow the dembow "
+            "kick-kick-snare syncopation, not a generic hip-hop groove. Real live percussion "
+            "(congas/bongos) and a horn section or guitar riff must be clearly audible "
+            "layered with the produced beat -- this should not be synths alone. Keep any "
+            "synth pads in a warm mid or low-mid register, used sparingly and only as "
+            "background texture -- avoid bright, glassy, shimmering, or high-register synth "
+            "tones anywhere in the mix."
         ),
     },
 }
@@ -644,7 +662,7 @@ KEY_INGREDIENTS = {
     "soul": ["vintage electric piano", "expressive guitar", "brass accents"],
     "salsa": ["piano montuno pattern", "conga and timbale percussion", "punchy horn stabs"],
     "bachata": ["lead requinto guitar", "bongo and güira percussion", "rhythm guitar strum pattern"],
-    "reggaeton": ["dembow riddim drum pattern", "deep sub-bass", "dark synth stabs"],
+    "reggaeton": ["dembow riddim drum pattern", "live congas or horn section", "deep sub-bass"],
 }
 
 
@@ -896,12 +914,22 @@ def parse_args() -> argparse.Namespace:
         "--fade-out-seconds",
         type=float,
         default=DEFAULT_FADE_OUT_SECONDS,
-        help="Linear fade-out length at the end of each track. Default: 2.0s.",
+        help="Linear fade-out length at the end of each track. Default: 4.0s.",
     )
     parser.add_argument(
         "--disable-fade-out",
         action="store_true",
         help="Skip the end-of-track fade-out and leave a hard cutoff.",
+    )
+    parser.add_argument(
+        "--fadeout",
+        action="store_true",
+        help=(
+            "Repair mode: skip generation entirely and apply a --fade-out-seconds fade to "
+            "every existing .mp3/.wav file directly in --output-dir. For tracks already on "
+            "disk with an abrupt or noisy cutoff (e.g. from before the fade-out default was "
+            "raised, or generated with --disable-fade-out)."
+        ),
     )
     parser.add_argument("--batch-size", type=int, default=None, help="Deprecated alias for --amount.")
     parser.add_argument(
@@ -1021,8 +1049,8 @@ def parse_args() -> argparse.Namespace:
     amount = args.batch_size if args.batch_size is not None else args.amount
     if amount < 1:
         parser.error("--amount must be 1 or greater")
-    if not args.all_genres and not args.genre:
-        parser.error("--genre is required unless --all-genres is set")
+    if not args.all_genres and not args.genre and not args.fadeout:
+        parser.error("--genre is required unless --all-genres or --fadeout is set")
     if args.concurrency != "auto":
         try:
             concurrency = int(args.concurrency)
@@ -1042,14 +1070,15 @@ SPANISH_SUBSTYLES = ["salsa", "bachata", "reggaeton"]
 
 
 def resolve_spanish_substyle(genre: str) -> str:
-    """Rotate the generic 'spanish' bucket to a concrete Latin dance sub-genre.
+    """Resolve the umbrella 'spanish' choice to one concrete Latin dance genre.
 
-    Plain "spanish" read as generic Spanish-pop/flamenco and didn't sound like
-    anything specific. Picking one of salsa/bachata/reggaeton per track -- each
-    with its own GENRE_PROFILES/KEY_INGREDIENTS/ARTIST_REFERENCES entry -- makes
-    the caption, BPM, and instrumentation all agree on one recognizable style
-    instead of blurring several together. Only "spanish" is affected; every
-    other genre passes through unchanged.
+    salsa/bachata/reggaeton are selectable on their own via --genre, each with a
+    dedicated GENRE_PROFILES/KEY_INGREDIENTS/ARTIST_REFERENCES entry. "spanish" is
+    kept as a lighter-weight umbrella choice for when the caller wants "some Latin
+    flavor" without picking a specific one -- it randomly resolves to one of the
+    three per track so the caption, BPM, and instrumentation all agree on one
+    concrete style instead of blurring several together. Every other genre,
+    including salsa/bachata/reggaeton themselves, passes through unchanged.
     """
     if genre != "spanish":
         return genre
@@ -2042,8 +2071,51 @@ def get_audio_duration(path: Path) -> float | None:
         return None
 
 
-def apply_fade_out(path: str, fade_seconds: float) -> bool:
-    """Apply a linear fade-out over the last ``fade_seconds`` instead of a hard cutoff."""
+def find_tail_silence_start(path: Path, duration: float) -> float | None:
+    """Return where a trailing silence run starts within the last TAIL_SILENCE_WINDOW_SECONDS.
+
+    Returns ``None`` if no qualifying silence is found (nothing to trim). Uses fast
+    input-side seeking since only the tail needs scanning, then re-anchors the reported
+    (window-relative) timestamps back to absolute file time.
+    """
+    window_start = max(0.0, duration - TAIL_SILENCE_WINDOW_SECONDS)
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-nostats",
+                "-ss",
+                f"{window_start:.3f}",
+                "-i",
+                str(path),
+                "-af",
+                f"silencedetect=noise={TAIL_SILENCE_NOISE_DB}dB:d={TAIL_SILENCE_MIN_SECONDS}",
+                "-f",
+                "null",
+                "-",
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    stderr = proc.stderr.decode("utf-8", errors="ignore")
+    last_start = None
+    for match in _SILENCE_START_RE.finditer(stderr):
+        last_start = window_start + float(match.group(1))
+    return last_start
+
+
+def apply_fade_out(path: str, fade_seconds: float, mp3_bitrate: str = "320k") -> bool:
+    """Trim any trailing silence-then-garbage artifact, then fade out cleanly before it.
+
+    Normally called pre-mp3-conversion (source is still the raw generated WAV, so the
+    PCM intermediate codec is correct). --fadeout repair mode calls this directly on
+    files already on disk, which may already be .mp3 -- writing PCM into a ".mp3" temp
+    file there would produce an invalid/oversized file, so pick the codec from the
+    actual suffix rather than assuming WAV.
+    """
     if not path or fade_seconds <= 0:
         return False
     source_path = Path(path)
@@ -2059,7 +2131,24 @@ def apply_fade_out(path: str, fade_seconds: float) -> bool:
         logger.warning("Fade-out skipped; could not determine a usable duration for {}", source_path)
         return False
 
-    fade_start = duration - fade_seconds
+    trim_point = duration
+    silence_start = find_tail_silence_start(source_path, duration)
+    if silence_start is not None and silence_start > fade_seconds:
+        trim_point = silence_start
+        logger.info(
+            "Trimming trailing silence/artifact: {:.2f}s -> {:.2f}s: {}",
+            duration,
+            trim_point,
+            source_path,
+        )
+
+    is_mp3 = source_path.suffix.lower() == ".mp3"
+    codec_args = (
+        ["-codec:a", "libmp3lame", "-b:a", mp3_bitrate, "-ar", "48000"]
+        if is_mp3
+        else _INTERMEDIATE_CODEC_ARGS
+    )
+    fade_start = trim_point - fade_seconds
     fade_filter = f"afade=t=out:st={fade_start:.3f}:d={fade_seconds}:curve=qsin"
     temp_path = source_path.with_name(f"{source_path.stem}.fade_tmp{source_path.suffix}")
     try:
@@ -2067,14 +2156,16 @@ def apply_fade_out(path: str, fade_seconds: float) -> bool:
             [
                 "-i",
                 str(source_path),
+                "-t",
+                f"{trim_point:.3f}",
                 "-af",
                 fade_filter,
-                *_INTERMEDIATE_CODEC_ARGS,
+                *codec_args,
                 str(temp_path),
             ]
         )
         temp_path.replace(source_path)
-        logger.info("Applied {}s fade-out: {}", fade_seconds, source_path)
+        logger.info("Applied {}s fade-out (final duration {:.2f}s): {}", fade_seconds, trim_point, source_path)
         return True
     except subprocess.CalledProcessError as exc:
         stderr = exc.stderr.decode("utf-8", errors="ignore") if exc.stderr else str(exc)
@@ -2367,9 +2458,37 @@ def generate_track_candidates(
     return candidate_results[candidate_paths.index(best_path)], used_duration
 
 
+def apply_fadeout_repair(save_dir: Path, fade_seconds: float, mp3_bitrate: str) -> int:
+    """Apply a fade-out to every existing audio file in save_dir; return failure count.
+
+    Repair mode for tracks already on disk with an abrupt or noisy cutoff -- no model
+    init or generation needed, just re-runs apply_fade_out() directly against files
+    that already exist (unlike the normal pipeline, which only ever fades the raw WAV
+    immediately after generation, before mp3 conversion).
+    """
+    paths = sorted(
+        p for p in save_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in (".mp3", ".wav") and ".fade_tmp" not in p.name
+    )
+    logger.info("Fadeout repair: {} file(s) found in {}", len(paths), save_dir)
+    failures = 0
+    for path in paths:
+        if not apply_fade_out(str(path), fade_seconds, mp3_bitrate):
+            failures += 1
+    logger.info("Fadeout repair done: {}/{} succeeded", len(paths) - failures, len(paths))
+    return failures
+
+
 def main() -> int:
     """Generate tracks and print resulting audio paths."""
     args = parse_args()
+    if args.fadeout:
+        save_dir = PROJECT_ROOT / args.output_dir
+        if not save_dir.is_dir():
+            logger.error("Fadeout repair: output directory not found: {}", save_dir)
+            return 1
+        failures = apply_fadeout_repair(save_dir, args.fade_out_seconds, args.mp3_bitrate)
+        return 1 if failures else 0
     amount = resolve_amount(args)
     genres = resolve_genres(args)
     concurrency = resolve_concurrency(args)
@@ -2475,7 +2594,7 @@ def main() -> int:
                     )
                 faded_out = False
                 if not args.disable_fade_out:
-                    faded_out = apply_fade_out(audio_path, args.fade_out_seconds)
+                    faded_out = apply_fade_out(audio_path, args.fade_out_seconds, args.mp3_bitrate)
                 # Loudness runs last so the integrated/true-peak measurement is of the
                 # exact audio being delivered (tone-shaped and faded).
                 lufs_normalized = False
