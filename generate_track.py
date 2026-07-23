@@ -746,8 +746,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--lyrics",
-        default=DEFAULT_INSTRUMENTAL_LYRICS,
-        help="Deprecated; final generation always uses instrumental section tags.",
+        default=None,
+        help=(
+            "Add sung vocals (default is instrumental-only). Pass 'auto' to have the "
+            "already-loaded 5Hz LM freely write matching lyrics per track for free/local "
+            "-- steer the theme with --lyrics-theme (e.g. 'love, dancing, enjoying life'). "
+            "Pass a path to an existing .txt file to use fixed lyrics loaded from disk, or "
+            "any other string to use it verbatim as the lyrics for every track."
+        ),
+    )
+    parser.add_argument(
+        "--lyrics-theme",
+        default="",
+        help="Theme/subject for --lyrics auto (e.g. 'love, dancing, enjoying life'). Ignored otherwise.",
     )
     parser.add_argument(
         "--duration",
@@ -767,7 +778,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow smart prompt metadata to override genre BPM/time signature.",
     )
-    parser.add_argument("--language", default="unknown", help='Vocal language, e.g. "en".')
+    parser.add_argument(
+        "--language",
+        default="unknown",
+        help='Vocal language for --lyrics, e.g. "en". Ignored when generating instrumental.',
+    )
     parser.add_argument("--seed", type=int, default=-1, help="-1 uses a random seed.")
     parser.add_argument("--amount", type=int, default=1, help="Number of tracks to generate.")
     parser.add_argument(
@@ -1058,6 +1073,12 @@ def parse_args() -> argparse.Namespace:
             parser.error('--concurrency must be "auto", "1", or "2"')
         if concurrency not in (1, 2):
             parser.error('--concurrency must be "auto", "1", or "2"')
+    if args.lyrics and args.lyrics.lower() != "auto" and os.path.isfile(args.lyrics):
+        try:
+            with open(args.lyrics, "r", encoding="utf-8") as lyrics_file:
+                args.lyrics = lyrics_file.read()
+        except OSError as exc:
+            parser.error(f"Could not read --lyrics file '{args.lyrics}': {exc}")
     return args
 
 
@@ -1091,6 +1112,21 @@ def resolve_amount(args: argparse.Namespace) -> int:
     if amount < 1:
         raise ValueError("--amount must be 1 or greater")
     return amount
+
+
+def resolve_lyrics_mode(args: argparse.Namespace) -> str:
+    """Return 'instrumental', 'auto', or 'fixed' for how this run should handle vocals.
+
+    'auto' asks the already-loaded 5Hz LM to freely write matching lyrics per track (free,
+    local, no external API) via create_sample(instrumental=False, ...) -- the same
+    mechanism cli.py's --use_cot_lyrics uses. 'fixed' is a literal lyrics string (or a
+    file already read into args.lyrics by parse_args) reused for every track in the run.
+    """
+    if not args.lyrics:
+        return "instrumental"
+    if args.lyrics.strip().lower() == "auto":
+        return "auto"
+    return "fixed"
 
 
 def resolve_model(args: argparse.Namespace) -> str:
@@ -1283,11 +1319,24 @@ def create_genre_prompt(
     amount = resolve_amount(args)
     section_plan = build_section_plan_text(duration)
     extra_detail = f" Extra user direction: {args.prompt.strip()}." if args.prompt.strip() else ""
+    lyrics_mode = resolve_lyrics_mode(args)
+    is_instrumental = lyrics_mode == "instrumental"
+    if is_instrumental:
+        track_kind = "instrumental"
+        vocal_instruction = "It must be fully instrumental with no sung or spoken vocals. "
+    else:
+        track_kind = "song"
+        theme = args.lyrics_theme.strip() or f"a theme fitting the {genre} genre and mood"
+        vocal_instruction = (
+            f"This track must have sung vocals in {args.language}, with lyrics about: "
+            f"{theme}. Write complete, singable lyrics that match the section timeline "
+            f"below, using [Verse]/[Chorus]/[Bridge]/etc. tags to mark each section. "
+        )
     query = (
         f"Create one unique {genre} music generation idea for track "
         f"{track_index + 1} of {amount}. The track must be a complete "
-        f"approximately {int(round(duration))}-second instrumental. "
-        f"It must be fully instrumental with no sung or spoken vocals. It must follow this "
+        f"approximately {int(round(duration))}-second {track_kind}. "
+        f"{vocal_instruction}It must follow this "
         f"exact section timeline: {section_plan}. Open the caption by explicitly naming "
         f"the genre '{genre}' and it must strongly match "
         f"this genre profile: {profile['caption']}. Make it different from previous ideas, "
@@ -1311,8 +1360,8 @@ def create_genre_prompt(
     sample = create_sample(
         llm_handler=llm_handler,
         query=query,
-        instrumental=True,
-        vocal_language="unknown",
+        instrumental=is_instrumental,
+        vocal_language=("unknown" if is_instrumental else args.language),
         temperature=args.sample_temperature,
         top_p=0.92,
         use_constrained_decoding=True,
@@ -1542,13 +1591,39 @@ def build_generation_params(
         "" if "skilled" in base_caption.lower() or "professional" in base_caption.lower()
         else CONCISE_QUALITY_HINT
     )
+
+    # Resolve vocals: 'auto' asks the LM (create_genre_prompt) to write lyrics matching
+    # --lyrics-theme; 'fixed' reuses the literal/file text from --lyrics as-is for every
+    # track. If 'auto' didn't come back with anything usable (LM call failed, or
+    # --no-smart-prompt skipped it entirely), fall back to instrumental for this track
+    # rather than sending a non-instrumental request with no actual words.
+    lyrics_mode = resolve_lyrics_mode(args)
+    is_instrumental = True
+    lyrics_text = build_instrumental_lyrics(duration)
+    vocal_language = "unknown"
+    if lyrics_mode == "auto":
+        generated_lyrics = str(sample.get("lyrics") or "").strip()
+        if generated_lyrics:
+            is_instrumental = False
+            lyrics_text = generated_lyrics
+            vocal_language = args.language
+        else:
+            logger.warning("Auto-lyrics generation returned nothing; falling back to instrumental for this track")
+    elif lyrics_mode == "fixed":
+        is_instrumental = False
+        lyrics_text = args.lyrics
+        vocal_language = args.language
+
+    vocal_caption_hint = (
+        # Highest priority: corrects the LM's own caption, which isn't guaranteed to
+        # avoid describing vocals/singers even when instrumental=True is requested
+        # (observed in practice: LM captions mentioning "female voice", "vocal chops").
+        "fully instrumental with no sung or spoken vocals" if is_instrumental else ""
+    )
     caption = assemble_capped_caption(
         base_caption,
         [
-            # Highest priority: corrects the LM's own caption, which isn't guaranteed to
-            # avoid describing vocals/singers even when instrumental=True is requested
-            # (observed in practice: LM captions mentioning "female voice", "vocal chops").
-            "fully instrumental with no sung or spoken vocals",
+            vocal_caption_hint,
             key_ingredient_guidance(key_ingredients or []),
             MIN_LAYER_GUARANTEE,
             FREQUENCY_BALANCE_GUARANTEE,
@@ -1561,9 +1636,9 @@ def build_generation_params(
         task_type="text2music",
         caption=caption,
         reference_audio=args.style_reference,
-        lyrics=build_instrumental_lyrics(duration),
-        instrumental=True,
-        vocal_language="unknown",
+        lyrics=lyrics_text,
+        instrumental=is_instrumental,
+        vocal_language=vocal_language,
         bpm=locked_bpm,
         keyscale=keyscale,
         timesignature=time_signature,
@@ -2621,6 +2696,8 @@ def main() -> int:
                         "key": keyscale,
                         "section_plan": build_section_plan(used_duration),
                         "seed": audio.get("params", {}).get("seed"),
+                        "instrumental": audio.get("params", {}).get("instrumental"),
+                        "lyrics": audio.get("params", {}).get("lyrics"),
                         "track_number": track_number,
                         "target_lufs": None if args.disable_lufs_normalization else args.target_lufs,
                         "true_peak_db": None if args.disable_lufs_normalization else args.true_peak_db,
